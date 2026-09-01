@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-archive",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "platform": "win32",
   "dsh": {
     "minVersion": "0.1.1-rc.2",
@@ -19,8 +19,8 @@
     "host/lib/index.js": "33296e1f4bd8e465a7331a816dbfa5d68e2f395f7b997e92943c9e53f539f74f",
     "host/lib/update-check.js": "f3cf99c0ee7f1278bf4c41bf4a09a508d6f11791e6c8d13fa51b4ad39dc4bd32",
     "LICENSE": "014cebc5f93a967fa8648f455e1aafa6fb9110e1d476f7ba652a3cd93b32c8fe",
-    "package.json": "2fb6fcedc53b1b654ca620ee5e8898a859f41b2417c8d0e89488c340c365e3ac",
-    "README.md": "87de03e5c765019e13283cd11248b529c23c3378f00150f21e7ea883e282d36f",
-    "README.zh-CN.md": "5a7b41b2350fbede68ac48bb050251225deef637ed18ffd087ebb6199fba2e07"
+    "package.json": "049b983b187fca8c00fb73a628d6b6378b6a8b5021c0130936d361349f11ad8d",
+    "README.md": "b4c97acc7ee70bfd5d63269e50277b2491bb01810f1da45eebdea3087801b748",
+    "README.zh-CN.md": "8f0d8f533332053e3da56a03592f95210e9c998ad1c5cab33bcfc93d155bc2a7"
   }
 }

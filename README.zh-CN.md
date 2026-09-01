@@ -31,7 +31,7 @@
 将指定版本安装到 DSH 的 web profile：
 
 ```powershell
-dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.2.0
+dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.0
 ```
 
 重启 DSH，然后打开 **设置 → 工作区管理**。
@@ -39,7 +39,7 @@ dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.2
 离线安装时，从 [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases) 下载 `.tgz` 文件并执行：
 
 ```powershell
-dsh plugin --profile web add .\dsh-conversation-archive-1.2.0.tgz
+dsh plugin --profile web add .\dsh-conversation-archive-1.0.0.tgz
 ```
 
 ## 更新与卸载

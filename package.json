@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-archive",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "description": "Native archive, retention, and backup management for DeepSeek Harness.",
   "type": "module",
   "main": "./host/lib/index.js",

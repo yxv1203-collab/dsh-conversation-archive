@@ -31,7 +31,7 @@ No folder needs to be created before installation or first use. Plugin state and
 Install the tagged release into the DSH web profile:
 
 ```powershell
-dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.2.0
+dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.0
 ```
 
 Restart DSH, then open **Settings → Workspace Manager**.
@@ -39,7 +39,7 @@ Restart DSH, then open **Settings → Workspace Manager**.
 For offline installation, download the `.tgz` asset from [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases) and run:
 
 ```powershell
-dsh plugin --profile web add .\dsh-conversation-archive-1.2.0.tgz
+dsh plugin --profile web add .\dsh-conversation-archive-1.0.0.tgz
 ```
 
 ## Update and remove
