@@ -1,8 +1,8 @@
 # DeepSeek Harness 工作区管理
 
-`dsh-conversation-archive` 是面向 DeepSeek Harness（DSH）的工作区管理插件，为原生归档会话补充集中管理、安全清理、重要文件保护和本地备份能力。插件集成于 DSH 原生设置页面，以平台真实会话状态为准，在不接管原项目源码的前提下统一管理会话缓存与相关产出。
+`dsh-conversation-archive` 是面向 DeepSeek Harness（DSH）的工作区管理插件，为原生归档会话补充集中管理、安全清理、重要文件保护和本地备份能力。插件集成于 DSH 原生设置页面，以平台真实会话状态为准，在不接管或重排项目源码的前提下管理对话数据与相关产出。
 
-当前稳定版本为 `1.0.0`，已在 Windows 与 DeepSeek Harness `0.1.1-rc.2` 环境完成自动化验证。
+当前稳定版本为 `1.1.0`，已在 Windows 与 DeepSeek Harness `0.1.1-rc.2` 环境完成自动化验证。
 
 ## 核心能力
 
@@ -33,7 +33,7 @@ AI 审核会产生少量 Token 消耗。插件对候选数量、文件大小、�
 
 ### 本地备份
 
-- 支持备份全部受管数据、指定会话缓存、项目缓存或保留文件。
+- 支持备份全部受管数据、指定 DSH 对话数据、某个项目关联的会话数据或保留文件。
 - 备份目标可选择本地目录或 Windows 可访问的网络磁盘。
 - 自动备份支持关闭、按天周期以及关闭 DSH 前尽力执行三种模式。
 - 备份 ZIP 包含文件清单和哈希，恢复前会重新验证完整性并拒绝覆盖非空目录。
@@ -41,18 +41,19 @@ AI 审核会产生少量 Token 消耗。插件对候选数量、文件大小、�
 
 ### 工作区组织
 
-- 日常对话按日期建立一级目录，同一天的会话使用标题、时间和短标识区分。
-- 项目会话在项目 `.cache` 下使用独立会话目录，避免不同会话共享缓存。
-- 每个会话按文档、表格、演示、代码、脚本、配置、数据、图片、音视频、压缩包、日志和其他内容分类。
-- 删除某日期下最后一个日常会话后，仅清理已经为空的日期目录。
+- 插件遵循 DSH 原生会话与项目目录，不为新会话建立镜像缓存或分类文件夹。
+- 不复制、重排或重命名用户工作区中的文件，项目源码结构始终由 DSH 和用户管理。
+- 插件仅在自身状态目录保存会话 ID、工作目录、创建时间和操作状态等必要映射。
+- 旧版本已经登记的插件缓存仍可识别，并仅在对应会话删除时按原有安全边界清理；升级后不会继续生成此类缓存。
 
 ## 兼容环境
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | Windows；依赖 PowerShell 与系统回收站 |
+| 操作系统 | Windows 10 或更高版本 |
 | DeepSeek Harness | 最低及已验证版本：`0.1.1-rc.2` |
 | Node.js | `20` 或更高版本 |
+| PowerShell | Windows PowerShell 5.1 或更高版本 |
 | DSH Profile | `web` |
 
 插件依赖当前 DSH 的 Cordis 插件加载机制。未经验证的 DSH 版本不会被自动声明为兼容。
@@ -95,8 +96,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 - 插件代码：`$DSH_HOME\profiles\web\node_modules\dsh-conversation-archive\versions\<版本>\`
 - 配置、状态与审计：`$DSH_HOME\storages\conversation-archive\`
-- 日常对话缓存：`<Harness 根目录>\daily_conversation\YYYY-MM-DD\<标题>-<时间>-<短标识>\`
-- 项目会话缓存：`<项目>\.cache\<会话短标识>\`
+- DSH 会话与项目文件：保持 DSH 原生位置和目录结构，插件不创建镜像分类目录
 - 全局保留库：`<Harness 根目录>\重要文件保护\`
 - 本地备份：用户在设置中选择的目录
 - 安装回滚副本：`$DSH_HOME\plugin-backups\dsh-conversation-archive\`

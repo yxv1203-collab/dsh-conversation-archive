@@ -13,6 +13,7 @@ import {
   captureSessionFiles, loadMapping, saveMapping, loadConfig, normalizeCategories, toJsonSafe,
   atomicWriteJson, loadVersionedJson, isPathInside, assertManagedPath, assertPhysicalPathInside, recycleScript, recyclePath,
   inspectVersionedJson, appendOperation, inspectOperationsLog, validateSessionEntry, validateCacheDeleteTarget, resolveProtectedChild,
+  findRetentionCandidates,
   archiveSessionFlow, restoreSessionFlow, purgeSessionFlow, pruneEmptyParents, runMany, orphanGC,
   createProjectEnv, protectImportantFiles, remindDue, scanImportantInDir,
   scanCacheCandidates, cacheDelete, CATEGORY_DIRS,
@@ -31,6 +32,36 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dca-'))
 test('sanitizeName 与 dateStr', () => {
   assert.equal(sanitizeName('a/b\\c:d*e?f"g<h>i|j'), 'a-b-c-d-e-f-g-h-i-j')
   assert.match(dateStr(new Date(2026, 7, 30)), /^2026-08-30$/)
+})
+
+test('原生 DSH 会话映射不要求插件缓存目录', () => {
+  const entry = {
+    id: 'native-layout-session',
+    cwd: DAILY,
+    createdAt: Date.now(),
+    kind: 'daily',
+    date: '2026-09-01',
+    tag: '原生会话',
+    layoutVersion: 3,
+    status: 'active',
+  }
+  assert.equal(validateSessionEntry(entry.id, entry, { harnessRoot: H, mapping: { [entry.id]: entry } }).ok, true)
+  assert.equal('cacheDir' in entry, false)
+  assert.equal('recordFile' in entry, false)
+})
+
+test('重要文件候选只包含会话时间窗口内的原生工作区文件', () => {
+  const root = path.join(tmp, 'native-retention-window')
+  fs.mkdirSync(root, { recursive: true })
+  const oldFile = path.join(root, '旧文件.md')
+  const currentFile = path.join(root, '本次产出.md')
+  fs.writeFileSync(oldFile, 'old')
+  fs.writeFileSync(currentFile, 'current')
+  const now = Date.now()
+  fs.utimesSync(oldFile, new Date(now - 60_000), new Date(now - 60_000))
+  fs.utimesSync(currentFile, new Date(now), new Date(now))
+  const candidates = findRetentionCandidates(root, fs, { modifiedAfter: now - 5_000, modifiedBefore: now + 5_000 })
+  assert.deepEqual(candidates.map((item) => item.name), ['本次产出.md'])
 })
 
 test('区域判定 v2（daily/项目深度1/harness-root/outside）', () => {
@@ -381,12 +412,13 @@ test('产物捕获拒绝物理越界的分类目录 junction', () => {
   assert.equal(fs.existsSync(path.join(outside, 'unsafe.md')), false)
 })
 
-test('createProjectEnv：项目 + 子项目 + 空会话缓存容器', () => {
+test('createProjectEnv：项目和子项目只创建原生空目录', () => {
   const proj = createProjectEnv(H, '项目B', fs)
-  assert.ok(fs.existsSync(proj.cacheDir))
-  assert.equal(fs.readdirSync(proj.cacheDir).length, 0)
+  assert.ok(fs.existsSync(proj.dir))
+  assert.deepEqual(fs.readdirSync(proj.dir), [])
   const sub = createProjectEnv(H, '子项目X', fs, { parentProject: '项目B' })
   assert.equal(sub.kind, 'subproject')
+  assert.deepEqual(fs.readdirSync(sub.dir), [])
 })
 
 const statePath = path.join(tmp, 'state.json')

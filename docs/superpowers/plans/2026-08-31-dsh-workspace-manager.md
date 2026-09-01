@@ -1,5 +1,7 @@
 # DSH Workspace Manager Implementation Plan
 
+> Historical plan: the custom per-session cache and file-classification layout described below was superseded by the DSH-native workspace model in `1.1.0`. It is retained only as implementation history; use the root `README.md`, acceptance document, and current code as the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the v0.3.1 prototype into a complete Windows-only DeepSeek Harness workspace-management plugin backed by DSH native archive state, safe per-session cache deletion, automatic AI-assisted file retention, local backup, native settings UI, and a distributable update flow.

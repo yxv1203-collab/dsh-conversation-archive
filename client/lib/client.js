@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
     }
     function formatDate(value) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString() : '—' }
     function formatSize(bytes) { const size = Number(bytes) || 0; return size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : size >= 1024 ? `${Math.ceil(size / 1024)} KB` : `${size} B` }
-    function labels(item) { return `${item.projectLabel || (item.kind === 'project' ? '项目缓存' : '日常对话')} · ${item.tag || item.id} · ${item.date || '日期未知'}` }
+    function labels(item) { return `${item.projectLabel || (item.kind === 'project' ? '项目' : '日常对话')} · ${item.tag || item.id} · ${item.date || '日期未知'}` }
     function updateLabel(value) {
       const labels = { disabled: '已关闭', checking: '检查中', unconfigured: '未配置发布源', current: '已是最新版本', available: `发现 ${value?.latestVersion || '新版本'}`, 'rate-limited': 'GitHub 限流，稍后重试', timeout: '检查超时', offline: '当前离线', 'http-error': '发布服务暂不可用', 'invalid-response': '发布信息无效', 'compatibility-unknown': '新版本兼容性未验证', 'incompatible-release': '新版本与当前 DSH 不兼容', 'incompatible-platform': '当前系统不受支持', 'incompatible-dsh': '当前 DSH 版本不受支持' }
       return labels[value?.state] || '状态未知'
@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dwm-label' }, `删除清单（${dialog.targets.length} 项）`),
         h('div', { className: 'dwm-modal-list' }, dialog.targets.map((item) => h('div', { className: 'dwm-modal-item', key: item.id },
           h('div', null, item.targetLabel || item.tag || item.id),
-          h('div', { className: 'dwm-meta' }, item.targetMeta || `${labels(item)} · ${item.mappingError ? '缓存未登记' : item.cachePhase || '仅原生归档'}`),
+          h('div', { className: 'dwm-meta' }, item.targetMeta || `${labels(item)} · ${item.mappingError ? '本地元数据未登记' : item.cachePhase || '仅原生归档'}`),
         ))),
       ) : null
       return h('div', { className: 'dwm-modal-backdrop', onMouseDown: (event) => { if (event.target === event.currentTarget && !busy) onCancel() } },
@@ -125,11 +125,11 @@ window.__ModuleLoader__.load({
         } catch (error) { setMessage(`操作失败：${error.message || '未知错误'}`); return null } finally { setBusy(false) }
       }
       const disabled = busy || !state.status?.csrfToken || state.status.writesDisabled
-      const projectOptions = [...new Set(state.archived.filter((item) => item.kind === 'project').map((item) => item.projectLabel || '项目缓存'))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      const projectOptions = [...new Set(state.archived.filter((item) => item.kind === 'project').map((item) => item.projectLabel || '项目'))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
       const archived = state.archived.filter((item) => {
         const matchesQuery = `${item.tag || ''} ${item.id} ${item.projectLabel || ''} ${item.date || ''}`.toLowerCase().includes(query.trim().toLowerCase())
         const matchesKind = archiveKindFilter === 'all' || item.kind === archiveKindFilter
-        const project = item.kind === 'project' ? item.projectLabel || '项目缓存' : ''
+        const project = item.kind === 'project' ? item.projectLabel || '项目' : ''
         const matchesProject = archiveProjectFilter === 'all' || (archiveProjectFilter === 'none' ? !project : project === archiveProjectFilter)
         return matchesQuery && matchesKind && matchesProject
       })
@@ -151,7 +151,7 @@ window.__ModuleLoader__.load({
         catch (error) { setMessage(`无法生成删除预览：${error.message || '未知错误'}`); return }
         finally { setBusy(false) }
         const types = preview.candidateTypes?.length ? preview.candidateTypes.join('、') : '无'
-        openDialog({ title: ids.length > 1 ? `删除 ${ids.length} 段已归档对话？` : '删除这段已归档对话？', description: '系统会先自动保留重要产出，再将对话记录和专属缓存移入 Windows 回收站。当前 DSH 版本可能在下次启动时完成最终回收。', summary: `本地候选 ${preview.candidateCount} 个（${types}）`, confirm: '确认删除', danger: true, targets, run: () => mutate(ids.length > 1 ? 'deleteMany' : 'delete', ids.length > 1 ? { ids } : { id: ids[0] }, { clearSelection: ids.length > 1 }) }, event)
+        openDialog({ title: ids.length > 1 ? `删除 ${ids.length} 段已归档对话？` : '删除这段已归档对话？', description: '系统会先从原生工作区自动保留重要产出，再将 DSH 对话数据移入 Windows 回收站；旧版本已登记的缓存会一并安全清理。当前 DSH 版本可能在下次启动时完成最终回收。', summary: `本地候选 ${preview.candidateCount} 个（${types}）`, confirm: '确认删除', danger: true, targets, run: () => mutate(ids.length > 1 ? 'deleteMany' : 'delete', ids.length > 1 ? { ids } : { id: ids[0] }, { clearSelection: ids.length > 1 }) }, event)
       }
       const commitDialog = async () => { const active = dialog; if (!active) return; await active.run(); closeDialog() }
       const deleteRetainedMany = async (ids) => {
@@ -169,7 +169,7 @@ window.__ModuleLoader__.load({
           await refresh()
         } finally { setBusy(false) }
       }
-      const showRetainedDelete = (ids, event) => openDialog({ title: ids.length > 1 ? `移除 ${ids.length} 个保留文件？` : '移除保留文件？', description: '所选文件及来源记录将移入 Windows 回收站，不影响原会话缓存。', confirm: ids.length > 1 ? '批量移入回收站' : '移入回收站', danger: true, targets: ids.map((id) => { const item = state.retained.find((row) => row.id === id); return { id, targetLabel: item?.displayName || id, targetMeta: item ? `${formatSize(item.size)} · ${item.sources?.length || 0} 个来源` : '当前列表已变化' } }), run: () => deleteRetainedMany(ids) }, event)
+      const showRetainedDelete = (ids, event) => openDialog({ title: ids.length > 1 ? `移除 ${ids.length} 个保留文件？` : '移除保留文件？', description: '所选文件及来源记录将移入 Windows 回收站，不影响 DSH 原生会话或工作区文件。', confirm: ids.length > 1 ? '批量移入回收站' : '移入回收站', danger: true, targets: ids.map((id) => { const item = state.retained.find((row) => row.id === id); return { id, targetLabel: item?.displayName || id, targetMeta: item ? `${formatSize(item.size)} · ${item.sources?.length || 0} 个来源` : '当前列表已变化' } }), run: () => deleteRetainedMany(ids) }, event)
       const save = (payload) => mutate('saveConfig', payload)
       const runBackup = () => {
         const selection = backupScope === 'all' ? { type: 'all' } : { type: backupScope, ids: backupScopeId ? [backupScopeId] : [] }
@@ -180,7 +180,7 @@ window.__ModuleLoader__.load({
       const archiveRows = archived.map((item) => h('div', { className: 'dwm-row', key: item.id },
         h('input', { className: 'dwm-check', type: 'checkbox', checked: !!selected[item.id], disabled, 'aria-label': `选择 ${item.tag || item.id}`, onChange: () => toggle(item.id) }),
         h('div', { className: 'dwm-row-main' }, h('div', { className: 'dwm-row-title' }, item.tag || item.id), h('div', { className: 'dwm-row-sub' }, `${labels(item)} · ${item.cachePhase || '仅原生归档'}`)),
-        item.mappingError ? h('span', { className: 'dwm-badge', title: item.mappingError }, '缓存未登记') : null,
+        item.mappingError ? h('span', { className: 'dwm-badge', title: item.mappingError }, '本地元数据未登记') : null,
         h('button', { type: 'button', className: 'dwm-btn dwm-icon', disabled, 'aria-label': '取消归档', title: '取消归档', onClick: () => void mutate('restore', { id: item.id }) }, h('svg', { viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true }, h('path', { d: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 6 6v1', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }))),
         h('button', { type: 'button', className: 'dwm-btn dwm-danger', disabled, onClick: (event) => void showDelete([item.id], event) }, '删除'),
       ))
@@ -224,7 +224,7 @@ window.__ModuleLoader__.load({
                 state.status?.settings?.backup?.configured ? h('button', { type: 'button', className: 'dwm-btn dwm-danger', disabled, onClick: () => { setBackupTarget(''); void save({ backup: { targetDir: '', mode: 'off', enabled: false } }) } }, '清除') : null,
               ),
             ),
-            h('label', { className: 'dwm-field' }, h('span', { className: 'dwm-label' }, '备份范围'), h('select', { className: 'dwm-select', value: backupScope, disabled, onChange: (event) => { setBackupScope(event.target.value); setBackupScopeId('') } }, [['all', '全部受管数据'], ['session', '单个对话缓存'], ['project', '单个项目缓存'], ['retained', '单个保留文件']].map(([type, label]) => h('option', { key: type, value: type }, label)))),
+            h('label', { className: 'dwm-field' }, h('span', { className: 'dwm-label' }, '备份范围'), h('select', { className: 'dwm-select', value: backupScope, disabled, onChange: (event) => { setBackupScope(event.target.value); setBackupScopeId('') } }, [['all', '全部受管数据'], ['session', '单个对话数据'], ['project', '单个项目会话数据'], ['retained', '单个保留文件']].map(([type, label]) => h('option', { key: type, value: type }, label)))),
             backupScope !== 'all' ? h('label', { className: 'dwm-field' }, h('span', { className: 'dwm-label' }, '备份对象'), h('select', { className: 'dwm-select', value: backupScopeId, disabled, onChange: (event) => setBackupScopeId(event.target.value) }, h('option', { value: '' }, '请选择…'), backupChoices.map((item) => h('option', { key: item.id, value: item.id }, item.displayName || item.tag || item.id)))) : null,
             h('label', { className: 'dwm-field' }, h('span', { className: 'dwm-label' }, '自动备份'), h('select', { className: 'dwm-select', value: backupMode, disabled, onChange: (event) => { const mode = event.target.value; const days = mode === 'periodic' ? (backupDays || 1) : backupDays; setBackupMode(mode); if (mode === 'periodic') setBackupDays(days); void save({ backup: { mode, enabled: mode !== 'off', autoIntervalDays: days } }) } }, h('option', { value: 'off' }, '关闭'), h('option', { value: 'periodic' }, '按天周期'), h('option', { value: 'shutdown' }, '关闭 DSH 前（尽力完成）'))),
             backupMode === 'periodic' ? h('label', { className: 'dwm-field' }, h('span', { className: 'dwm-label' }, '间隔（1–365 天）'), h('input', { className: 'dwm-input', type: 'number', min: 1, max: 365, value: backupDays, disabled, onChange: (event) => setBackupDays(Number(event.target.value)), onBlur: () => { if (Number.isInteger(backupDays) && backupDays >= 1 && backupDays <= 365) void save({ backup: { mode: 'periodic', enabled: true, autoIntervalDays: backupDays } }) } })) : null,

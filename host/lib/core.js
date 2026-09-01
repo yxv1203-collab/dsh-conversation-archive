@@ -20,7 +20,7 @@ export const DEFAULTS = {
   cacheDirName: '.cache',
   stateSubDir: 'conversation-archive',
   protectDirName: '重要文件保护', // 彻底删除前的重要文件保护区（防误删）
-  capture: { enabled: true, maxDepth: 4, maxSize: 10 * 1024 * 1024, margin: 5 * 60 * 1000, dedup: true },
+  capture: { enabled: true, maxDepth: 4, maxSize: 10 * 1024 * 1024, margin: 5 * 60 * 1000, dedup: true }, // v2 legacy compatibility; margin is reused by native retention scanning
   archive: { moveDshSession: true, deleteDshSession: false }, // 联动：归档默认移出 DSH 会话（左侧消失）；删会话默认关
   purge: { deleteDshSession: true },    // 彻底删除：默认连 DSH 会话一并删除
   backup: { enabled: false, mode: 'off', targetDir: '', autoIntervalDays: 0, keepCount: 5 }, // periodic / shutdown / off
@@ -30,7 +30,7 @@ export const DEFAULTS = {
   debugMarkers: false,                  // 是否写诊断标记文件（默认关）
 }
 
-/** 分类目录（Codex 式多类别；顺序仅展示用） */
+/** 旧版 v2 镜像缓存目录，仅用于识别和安全清理升级前的数据。 */
 export const CATEGORY_DIRS = ['会话记录', '文档', '表格', '演示', '代码', '脚本', '配置', '数据', '图片', '音视频', '压缩包', '日志', '其他']
 
 /** 配置中的分类目录只能是单级、无路径语义的目录名。 */
@@ -285,7 +285,13 @@ export function validateSessionEntry(sessionId, entry, { harnessRoot, config = D
     if (typeof entry.root !== 'string' || !isPathInside(root, entry.root) || path.dirname(path.resolve(entry.root)) !== root) return { ok: false, reason: 'invalid-session-entry' }
     // v0.3.1 project caches shared <project>/.cache. They are deliberately
     // quarantined: their old mapping must never authorize deletion or moves.
-    if (entry.layoutVersion !== 2) return { ok: false, reason: 'legacy-shared-project-cache' }
+    if (![2, 3].includes(entry.layoutVersion)) return { ok: false, reason: 'legacy-shared-project-cache' }
+  }
+  if (entry.layoutVersion === 3) {
+    if (!Number.isFinite(Number(entry.createdAt)) || typeof entry.cwd !== 'string' || !isPathInside(root, entry.cwd)) return { ok: false, reason: 'invalid-session-entry' }
+    if (['cacheDir', 'recordFile', 'manifestFile', 'archivePath', 'cacheKey'].some((key) => entry[key] !== undefined)) return { ok: false, reason: 'invalid-session-entry' }
+    if (entry.status !== 'active') return { ok: false, reason: 'invalid-session-entry' }
+    return { ok: true, layout: null, archiveRoot: path.join(root, config.archiveDirName || DEFAULTS.archiveDirName) }
   }
   if (entry.layoutVersion === 2 && entry.kind === 'daily' && !Number.isFinite(Number(entry.createdAt))) return { ok: false, reason: 'invalid-session-entry' }
   if (entry.layoutVersion === 2 && entry.cacheKey !== undefined && (!safeTag(entry.cacheKey) || !new RegExp(`^${sessionShortId(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:-\\d+)?$`).test(entry.cacheKey))) return { ok: false, reason: 'invalid-session-entry' }
@@ -332,6 +338,7 @@ export function validateCacheDeleteTarget(target, mapping, { harnessRoot, config
 /** Check configured roots and the session cache before any filesystem mutation. */
 export function assertSessionPhysicalPaths(_sessionId, entry, valid, { harnessRoot, config = DEFAULTS, fsApi }) {
   if (!fsApi) return
+  if (entry.layoutVersion === 3) return
   const root = path.resolve(harnessRoot || DEFAULTS.harnessRoot)
   const dailyRoot = path.join(root, config.dailyDirName || DEFAULTS.dailyDirName)
   const archiveRoot = path.join(root, config.archiveDirName || DEFAULTS.archiveDirName)
@@ -573,7 +580,7 @@ export function cacheLayoutFor(entry, opts = {}) {
   }
 }
 
-/** 确保缓存布局目录存在（base、会话记录、各分类夹；lazy 时仅建 base+会话记录） */
+/** 创建旧版 v2 缓存布局；新会话使用 DSH 原生布局，不调用此函数。 */
 export function ensureCacheLayout(layout, fsApi, lazy = false) {
   fsApi.mkdirSync(layout.base, { recursive: true })
   fsApi.mkdirSync(layout.recordDir, { recursive: true })
@@ -625,8 +632,8 @@ function representativeText(file, size, limit, fsApi) {
   return parts.join(size <= limit ? '' : '\n…[中段/末段抽样]…\n').slice(0, limit)
 }
 
-/** Candidate discovery is deliberately confined to one already-validated cache root. */
-export function findRetentionCandidates(cacheRoot, fsApi, { maxCandidates = 40, maxCandidateBytes = 8 * 1024 * 1024, maxExcerptChars = 3000 } = {}) {
+/** Candidate discovery is deliberately confined to one already-validated source root. */
+export function findRetentionCandidates(cacheRoot, fsApi, { maxCandidates = 40, maxCandidateBytes = 8 * 1024 * 1024, maxExcerptChars = 3000, modifiedAfter = -Infinity, modifiedBefore = Infinity } = {}) {
   assertPhysicalPathInside(cacheRoot, [path.dirname(cacheRoot)], fsApi)
   const root = path.resolve(cacheRoot)
   const candidateLimit = Math.max(1, Math.min(200, Number(maxCandidates) || 40))
@@ -658,6 +665,7 @@ export function findRetentionCandidates(cacheRoot, fsApi, { maxCandidates = 40, 
         stat = fsApi.statSync(file)
       } catch { continue }
       if (!stat.isFile()) continue
+      if (stat.mtimeMs < Number(modifiedAfter) || stat.mtimeMs > Number(modifiedBefore)) continue
       let digest = ''
       try { digest = sha256File(file, fsApi) } catch { continue }
       let excerpt = ''
@@ -689,7 +697,7 @@ export function findRetentionCandidates(cacheRoot, fsApi, { maxCandidates = 40, 
 
 export function createRetentionPrompt(candidates, imageReview = 'metadata-only') {
   return [
-    '你正在审核即将删除的 DeepSeek Harness 对话缓存。仅选择不可轻易重建的最终产出；不要选择临时文件、依赖或日志。',
+    '你正在审核 DeepSeek Harness 对话关联的工作区文件。仅选择不可轻易重建、值得额外防误删保存的最终产出；不要选择临时文件、依赖或日志。',
     '只输出严格 JSON，且只允许此结构：{"retain":[{"id":"候选ID","reason":"简短原因"}]}。如果没有值得保留的内容，输出 {"retain":[]}；不得输出 Markdown 或额外文字。',
     `图片审核能力：${imageReview}。未附带图片块时仅依据文件元数据判断，不声称已查看图片内容。`,
     JSON.stringify(candidates.map(({ id, relativePath, category, size, excerpt, sampleKind, imageMediaType }) => ({ id, relativePath, category, size, excerpt, sampleKind, imageMediaType }))),
@@ -1064,7 +1072,7 @@ function fileMd5(fsApi, file) {
 }
 
 /**
- * 捕获会话期间产生的文件 → 按分类复制到 destRoot。
+ * 旧版 v2 产物捕获兼容函数；新会话不会复制或分类工作区文件。
  * dedup=true 时：目标同名文件若大小+md5 相同则跳过（避免重复存储）。
  */
 export function captureSessionFiles(cwd, start, end, destRoot, fsApi, opts = {}) {
@@ -1160,7 +1168,7 @@ export function isSafeSessionId(id) {
   return typeof id === 'string' && id.length > 0 && !['schemaVersion', '__proto__', 'prototype', 'constructor', '.', '..'].includes(id) && !/[\\/\u0000]/.test(id)
 }
 
-/** 创建项目/子项目环境（只预建 .cache；分类属于各会话的独立根）。 */
+/** 创建项目/子项目环境；文件组织完全交给 DSH 和用户。 */
 export function createProjectEnv(root, name, fsApi, opts = {}) {
   const rootAbs = path.resolve(root)
   let rootStat
@@ -1174,28 +1182,8 @@ export function createProjectEnv(root, name, fsApi, opts = {}) {
   if (parent) assertPhysicalPathInside(base, [rootAbs], fsApi)
   const dir = path.join(base, clean)
   assertPhysicalPathInside(dir, [base], fsApi)
-  const cacheDir = path.join(dir, opts.cacheDirName || DEFAULTS.cacheDirName)
-  assertPhysicalPathInside(cacheDir, [dir], fsApi)
-  const readme = path.join(dir, 'README.md')
-  assertPhysicalPathInside(readme, [dir], fsApi)
   fsApi.mkdirSync(dir, { recursive: true })
-  fsApi.mkdirSync(cacheDir, { recursive: true })
-  if (!fsApi.existsSync(readme)) {
-    const kind = parent ? '子项目' : '项目'
-    fsApi.writeFileSync(readme, [
-      `# ${clean}`, '',
-      `> ${kind}环境，创建于 ${new Date().toLocaleString('zh-CN')}`, `> 上级目录：${base}`, '',
-      '## 缓存约定（Codex 式分类缓存）', '',
-      `- \`.cache\\\`：项目缓存区（自动创建）`,
-      `  - \`<会话短标识>\\\`：每条会话独立的完整缓存根`,
-      `  - 每个会话根内含 \`会话记录\\ 文档\\ 代码\\ 配置\\ 图片\\ 压缩包\\ 其他\\\` 等分类`,
-      '- 项目缓存不按日期分组；不同会话绝不共享缓存目录。', '',
-      '## 归档', '',
-      '对话归档为**软归档**（完整保留）；彻底删除进回收站。', '',
-      '## 规则', '', '详见 `daily_conversation\\_rules.md`。', '',
-    ].join('\n'), 'utf8')
-  }
-  return { dir, cacheDir, readme, kind: parent ? 'subproject' : 'project' }
+  return { dir, kind: parent ? 'subproject' : 'project' }
 }
 
 /** PowerShell 回收站脚本（文件或目录，SendToRecycleBin） */
@@ -1575,6 +1563,13 @@ function sessionBackupSource(id, deps) {
   const entry = mapping[id]
   const valid = validateSessionEntry(id, entry, { harnessRoot, config, mapping })
   if (!valid.ok) throw new Error('unknown-backup-selection')
+  if (entry.layoutVersion === 3) {
+    const located = deps.locateSessionDir?.(id, entry)
+    if (!located?.ok || typeof located.dir !== 'string' || typeof deps.sessionPersistenceRoot !== 'string') throw new Error('backup-source-missing')
+    const source = assertPhysicalPathInside(located.dir, [deps.sessionPersistenceRoot], fsApi)
+    if (!fsApi.existsSync(source)) throw new Error('backup-source-missing')
+    return { kind: 'tree', source, trustedRoot: deps.sessionPersistenceRoot, stagePath: `sessions/${id}` }
+  }
   assertSessionPhysicalPaths(id, entry, valid, { harnessRoot, config, fsApi })
   const source = entry.status === 'archived' ? entry.archivePath : valid.layout.base
   const trustedRoot = entry.status === 'archived' ? path.join(harnessRoot, config.archiveDirName || DEFAULTS.archiveDirName) : valid.layout.base

@@ -9,10 +9,10 @@ import os from 'node:os'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import {
-  DEFAULTS, CATEGORY_DIRS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, normalizeCategories, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, classifyWorkspace, sanitizeName, dateStr, placeholderTag, uniqueTag,
-  sessionShortId, cacheLayoutFor, ensureCacheLayout, appendRecord, captureSessionFiles,
+  DEFAULTS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, normalizeCategories, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, classifyWorkspace, sanitizeName, dateStr, placeholderTag,
+  cacheLayoutFor,
   loadMapping, saveMapping, validateSessionEntry, validateCacheDeleteTarget, archiveSessionFlow, restoreSessionFlow, purgeSessionFlow,
-  runMany, createBackup, listBackups, restoreBackup, runOverdueBackup, backupScheduleView, resetBackupSchedule, orphanGC, createProjectEnv, recyclePath, categoryOf, importantExts,
+  runMany, createBackup, listBackups, restoreBackup, runOverdueBackup, backupScheduleView, resetBackupSchedule, orphanGC, createProjectEnv, recyclePath,
   findRetentionCandidates, reviewRetentionCandidates, retainReviewedFiles, listRetainedFiles, restoreRetainedFile, removeRetainedProvenance, recycleRetainedFile, recoverRetainedRecycle, retentionReminder,
   scanCacheCandidates, cacheDelete,
 } from './core.js'
@@ -354,25 +354,6 @@ export default {
       assertSessionPhysicalPaths(id, entry, valid, { harnessRoot, config, fsApi })
       return valid
     }
-    const captureEntryOutputs = (id, entry) => {
-      if (config.capture?.enabled === false || !entry?.cwd || !fsApi.existsSync(entry.cwd)) return []
-      const valid = validateCacheWrite(id, entry)
-      const layout = valid.layout
-      ensureCacheLayout(layout, fsApi, false)
-      const end = Date.now()
-      const { copied } = captureSessionFiles(entry.cwd, entry.createdAt, end, layout.base, fsApi, {
-        ...config.capture,
-        importantExts: importantExts(config),
-        categories: config.categories,
-      })
-      if (copied.length > 0) {
-        fsApi.mkdirSync(layout.recordDir, { recursive: true })
-        const lines = ['# 产物清单', '', `会话: ${id}`, `标签: ${entry.tag}`, `捕获时间: ${new Date(end).toLocaleString('zh-CN')}`, '', ...copied.map((file) => `- ${path.relative(layout.base, file)}`)]
-        fsApi.writeFileSync(entry.manifestFile, `${lines.join('\n')}\n`, 'utf8')
-      }
-      return copied
-    }
-
     // ── DSH 会话定位/删除：locator 输出也不是权限，只接受当前 id 的直接目录。──
     const getValidatedEntry = (sessionId) => {
       const id = String(sessionId || '')
@@ -401,11 +382,20 @@ export default {
       if (!fsApi.existsSync(located.dir)) return { ok: true, alreadyAbsent: true }
       return dshRecycle(located.dir, undefined, fsApi)
     }
-    const retainBeforePurge = async ({ sessionId, entry, target, sourceRoots = [harnessRoot], operationId }) => {
+    const nativeRetentionTarget = (entry, fallback = '') => entry?.layoutVersion === 3
+      ? (entry.kind === 'project' ? entry.root : entry.cwd)
+      : fallback
+    const nativeRetentionWindow = (entry) => entry?.layoutVersion === 3
+      ? {
+          modifiedAfter: Number(entry.createdAt) - Math.max(0, Number(config.capture?.margin) || 0),
+          modifiedBefore: Date.now() + Math.max(0, Number(config.capture?.margin) || 0),
+        }
+      : {}
+    const retainBeforePurge = async ({ sessionId, entry, target, sourceRoots = [harnessRoot], operationId, candidateWindow = {} }) => {
       if (pluginDisposed) return { ok: false, reason: 'plugin-disposed' }
       if (config.retention?.enabled === false) return { ok: true, retained: [] }
       let candidates
-      try { candidates = findRetentionCandidates(target, fsApi, config.retention) }
+      try { candidates = findRetentionCandidates(target, fsApi, { ...config.retention, ...candidateWindow }) }
       catch { return { ok: false, reason: 'retention-scan-failed' } }
       if (candidates.truncated) return { ok: false, reason: 'retention-candidate-limit-exceeded' }
       if (candidates.length === 0) return { ok: true, retained: [] }
@@ -496,9 +486,8 @@ export default {
       }
       const { id, entry, map } = checked
       if (!dsh.listArchivedIds().includes(id)) return compact({ ok: false, reason: 'not-natively-archived' })
+      if (entry.layoutVersion === 3) return { ok: true, id, entry, map, cacheScope: 'none' }
       if (entry.status === 'archived' && entry.archivePath && fsApi.existsSync(entry.archivePath)) return { ok: true, id, entry, map, cacheScope: 'registered', target: entry.archivePath }
-      try { captureEntryOutputs(id, entry) }
-      catch (error) { return compact({ ok: false, reason: error?.message || 'capture-before-delete-failed' }) }
       const activeTarget = cacheLayoutFor(entry, { harnessRoot }).base
       if (!fsApi.existsSync(activeTarget)) {
         // The periodic native reconciliation can move this cache after the
@@ -559,6 +548,10 @@ export default {
       const checked = getValidatedEntry(id)
       if (!checked.ok) { if (auditEnabled) audit({ operationId, type: 'restore', sessionId: id, phase: 'complete', outcome: 'ok', details: { mode: native.mode || '', cacheScope: 'none' } }); return compact({ ok: true, nativeRestored: true, nativeMode: native.mode, cacheBookkeeping: { ok: false, reason: checked.reason } }) }
       const { entry, map } = checked
+      if (entry.layoutVersion === 3) {
+        if (auditEnabled) audit({ operationId, type: 'restore', sessionId: id, phase: 'complete', outcome: 'ok', details: { mode: native.mode || '', cacheScope: 'none' } })
+        return compact({ ok: true, nativeRestored: true, nativeMode: native.mode, cacheBookkeeping: { ok: true, nativeLayout: true } })
+      }
       const candidate = structuredClone(entry)
       const nextMap = { ...map, [id]: candidate }
       // `status` remains a legacy cache-operation phase only; it is never
@@ -611,10 +604,18 @@ export default {
           retain: retentionAlreadyDone ? async () => ({ ok: true, retained: [] }) : (input) => retainBeforePurge({ ...input, operationId }), mapping: map,
         })
       } else {
-        const retention = retentionAlreadyDone ? { ok: true, retained: [] } : await retainBeforePurge({ sessionId: id, entry: { kind: 'daily' }, target: located.dir, sourceRoots: [sessionPersistence.root], operationId })
+        const reviewTarget = nativeRetentionTarget(entry, located.dir)
+        const retention = retentionAlreadyDone ? { ok: true, retained: [] } : await retainBeforePurge({
+          sessionId: id,
+          entry: entry || { kind: 'daily' },
+          target: reviewTarget,
+          sourceRoots: entry?.layoutVersion === 3 ? [harnessRoot] : [sessionPersistence.root],
+          candidateWindow: nativeRetentionWindow(entry),
+          operationId,
+        })
         if (!retention.ok) res = { ok: false, reason: retention.reason, recycled: [], protectedFiles: [] }
         else {
-          const recycled = await deleteDshSessionOnce(id, null, map)
+          const recycled = await deleteDshSessionOnce(id, entry, map)
           res = recycled.ok
             ? { ok: true, recycled: [located.dir], protectedFiles: (retention.retained || []).map((item) => item.path || item) }
             : { ok: false, reason: recycled.reason || recycled.error || 'dsh-recycle-failed', recycled: [], protectedFiles: [] }
@@ -677,12 +678,13 @@ export default {
       if (!prepared.ok) return compact({ ok: false, reason: prepared.reason })
       const located = await locateDshSessionAny(id, prepared.entry || null, prepared.map || store.getMap())
       if (!located.ok) return compact({ ok: false, reason: located.reason })
-      const reviewTarget = prepared.cacheScope === 'registered' ? prepared.target : located.dir
+      const reviewTarget = prepared.cacheScope === 'registered' ? prepared.target : nativeRetentionTarget(prepared.entry, located.dir)
       const retention = await retainBeforePurge({
         sessionId: id,
         entry: prepared.entry || { kind: 'daily' },
         target: reviewTarget,
-        sourceRoots: prepared.cacheScope === 'registered' ? [harnessRoot] : [sessionPersistence.root],
+        sourceRoots: prepared.cacheScope === 'registered' || prepared.entry?.layoutVersion === 3 ? [harnessRoot] : [sessionPersistence.root],
+        candidateWindow: nativeRetentionWindow(prepared.entry),
         operationId,
       })
       if (!retention.ok) return compact({ ok: false, reason: retention.reason })
@@ -701,16 +703,19 @@ export default {
         let target = ''
         let cacheScope = 'none'
         if (checked.ok) {
-          const active = cacheLayoutFor(checked.entry, { harnessRoot }).base
-          target = checked.entry.archivePath && fsApi.existsSync(checked.entry.archivePath) ? checked.entry.archivePath : fsApi.existsSync(active) ? active : ''
-          if (target) cacheScope = 'registered'
+          if (checked.entry.layoutVersion === 3) target = nativeRetentionTarget(checked.entry)
+          else {
+            const active = cacheLayoutFor(checked.entry, { harnessRoot }).base
+            target = checked.entry.archivePath && fsApi.existsSync(checked.entry.archivePath) ? checked.entry.archivePath : fsApi.existsSync(active) ? active : ''
+            if (target) cacheScope = 'registered'
+          }
         }
         if (!target) {
           const located = await locateDshSessionAny(id, checked.ok ? checked.entry : null, checked.ok ? checked.map : store.getMap())
           if (located.ok) target = located.dir
         }
         let candidates = []
-        if (target) try { candidates = findRetentionCandidates(target, fsApi, config.retention) } catch { candidates = [] }
+        if (target) try { candidates = findRetentionCandidates(target, fsApi, { ...config.retention, ...nativeRetentionWindow(checked.ok ? checked.entry : null) }) } catch { candidates = [] }
         items.push({ id, cacheScope, candidateCount: candidates.length, candidateTypes: [...new Set(candidates.map((item) => item.category))].slice(0, 20) })
       }
       return {
@@ -827,7 +832,7 @@ export default {
           kind: entry.kind,
           tag: entry.tag,
           date: entry.date || null,
-          projectLabel: entry.kind === 'project' ? (sanitizeName(path.basename(entry.root || '')) || '项目缓存') : '日常对话',
+          projectLabel: entry.kind === 'project' ? (sanitizeName(path.basename(entry.root || '')) || '项目') : '日常对话',
         })
       }
       const queued = new Set(deletionQueue().map((item) => item.sessionId))
@@ -840,7 +845,7 @@ export default {
           kind: entry.kind,
           tag: entry.tag,
           date: entry.date || null,
-          projectLabel: entry.kind === 'project' ? (sanitizeName(path.basename(entry.root || '')) || '项目缓存') : '日常对话',
+          projectLabel: entry.kind === 'project' ? (sanitizeName(path.basename(entry.root || '')) || '项目') : '日常对话',
           cachePhase: entry.cachePhase || entry.status || 'tracked',
         }
       })
@@ -882,6 +887,8 @@ export default {
     const backupDeps = () => ({
       fsApi, harnessRoot, stateRoot, retainedRoot: path.join(harnessRoot, config.protectDirName || DEFAULTS.protectDirName),
       retainedIndexPath, backupStatePath, mapping: store.getMap(), config, recycle, log,
+      sessionPersistenceRoot: sessionPersistence?.root,
+      locateSessionDir: (id, entry) => locateDshSession(id, entry),
     })
     const backup = async (selection = { type: 'all' }) => {
       if (pluginDisposed) return { ok: false, reason: 'plugin-disposed' }
@@ -917,7 +924,7 @@ export default {
 
     // ══════════ 根引擎 ══════════
 
-    // ── 1) 会话创建 → 归档（建布局）──
+    // ── 1) 会话创建 → 只登记 DSH 原生元数据，不创建镜像缓存 ──
     ctx.on('session/created', (session) => {
       try {
         if (writesDisabled || store.isReadOnly()) return
@@ -930,6 +937,8 @@ export default {
           log(`cwd=${header.cwd} 位于 DeepSeek Harness 根目录：请先手动创建项目文件夹后在其中新建对话`)
           return
         }
+        assertPhysicalPathInside(header.cwd, [harnessRoot], fsApi)
+        if (cls.kind === 'project') assertPhysicalPathInside(cls.root, [harnessRoot], fsApi)
         const id = String(header.id)
         if (!isSafeSessionId(id)) return
         const created = new Date(header.createdAt ?? Date.now())
@@ -941,36 +950,19 @@ export default {
           root: cls.root || undefined,
           date: cls.kind === 'daily' ? dateStr(created) : undefined,
           tag: placeholderTag(id),
-          layoutVersion: 2,
-          cacheKey: sessionShortId(id),
+          layoutVersion: 3,
           status: 'active',
         }
-        let layout = cacheLayoutFor(entry, { harnessRoot })
-        // A short-id collision is unlikely but must never turn two sessions
-        // into one cache root. The cache-key suffix stays part of identity.
-        let collision = 1
-        const existing = store.getMap()
-        while (fsApi.existsSync(layout.base) || Object.values(existing).some((other) => path.resolve(other?.cacheDir || '') === path.resolve(layout.base))) {
-          collision += 1
-          entry.cacheKey = `${sessionShortId(id)}-${collision}`
-          layout = cacheLayoutFor(entry, { harnessRoot })
-        }
-        entry.cacheDir = layout.base
-        entry.recordFile = layout.recordFile
-        entry.manifestFile = path.join(layout.recordDir, `${entry.tag}.清单.md`)
-        const valid = validateCacheWrite(id, entry)
-        for (const destination of [layout.recordDir, ...CATEGORY_DIRS.map((name) => layout.categoryDir(name))]) {
-          assertPhysicalPathInside(destination, [valid.layout.base], fsApi)
-        }
-        ensureCacheLayout(layout, fsApi, !config.capture?.enabled)
+        const valid = validateSessionEntry(id, entry, { harnessRoot, config, mapping: { [id]: entry } })
+        if (!valid.ok) throw new Error(valid.reason)
         store.upsert(id, entry)
-        log(`会话 ${id} 就绪 → ${layout.base} (${cls.kind})`)
+        log(`会话 ${id} 已登记 DSH 原生工作区 (${cls.kind})`)
       } catch (e) {
         ctx.logger?.warn('[conversation-archive] session/created 处理失败:', e?.message)
       }
     })
 
-    // ── 2) 会话事件 → 标签（自动提取+区分性） + 对话记录 ──
+    // ── 2) 会话事件 → 仅更新展示标签；DSH 自己持久化对话记录 ──
     ctx.on('session/event', (session, event) => {
       try {
         if (writesDisabled || store.isReadOnly()) return
@@ -981,131 +973,21 @@ export default {
         // newly active conversation's recording.
         const entry = reconcileNativeArchives()[id]
         if (!entry || dsh.listArchivedIds().includes(id)) return
-        validateCacheWrite(id, entry)
-        ensureCacheLayout(cacheLayoutFor(entry, { harnessRoot }), fsApi, !config.capture?.enabled)
         if (event?.type === 'session/title' && event.data?.title) {
           const candidate = sanitizeName(event.data.title) || placeholderTag(id)
-          let newTag = candidate
-          if (entry.kind === 'daily') {
-            // The short id normally makes this unique. If a truncated-id
-            // collision exists, suffix the title and rebuild every path below.
-            let n = 1
-            let next = cacheLayoutFor({ ...entry, tag: newTag }, { harnessRoot }).base
-            while (next !== entry.cacheDir && fsApi.existsSync(next)) {
-              n += 1
-              newTag = `${candidate}-${n}`
-              next = cacheLayoutFor({ ...entry, tag: newTag }, { harnessRoot }).base
-            }
-          }
+          const newTag = candidate
           if (newTag && newTag !== entry.tag) {
-            if (entry.kind === 'daily') {
-              const oldDir = entry.cacheDir
-              const oldManifest = entry.manifestFile
-              const newEntry = { ...entry, tag: newTag }
-              const newLayout = cacheLayoutFor(newEntry, { harnessRoot })
-              const newManifest = path.join(newLayout.recordDir, `${newTag}.清单.md`)
-              const renameRoot = newEntry.kind === 'daily' ? path.join(harnessRoot, config.dailyDirName || DEFAULTS.dailyDirName) : newEntry.root
-              assertPhysicalPathInside(newLayout.base, [renameRoot], fsApi)
-              for (const destination of [newLayout.recordDir, ...CATEGORY_DIRS.map((name) => newLayout.categoryDir(name))]) {
-                assertPhysicalPathInside(destination, [newLayout.base], fsApi)
-              }
-              if (fsApi.existsSync(oldDir) && oldDir !== newLayout.base) {
-                assertPhysicalPathInside(oldDir, [path.join(harnessRoot, config.dailyDirName || DEFAULTS.dailyDirName)], fsApi)
-                assertPhysicalPathInside(newLayout.base, [path.join(harnessRoot, config.dailyDirName || DEFAULTS.dailyDirName)], fsApi)
-                let movedRoot = false
-                let movedManifest = false
-                const movedManifestPath = path.join(newLayout.recordDir, path.basename(oldManifest || ''))
-                try {
-                  fsApi.mkdirSync(path.dirname(newLayout.base), { recursive: true })
-                  fsApi.renameSync(oldDir, newLayout.base)
-                  movedRoot = true
-                  if (oldManifest && fsApi.existsSync(movedManifestPath) && movedManifestPath !== newManifest) {
-                    assertPhysicalPathInside(movedManifestPath, [newLayout.recordDir], fsApi)
-                    assertPhysicalPathInside(newManifest, [newLayout.recordDir], fsApi)
-                    if (fsApi.existsSync(newManifest)) throw new Error('manifest-target-exists')
-                    fsApi.renameSync(movedManifestPath, newManifest)
-                    movedManifest = true
-                  }
-                } catch (e) {
-                  try {
-                    if (movedManifest && fsApi.existsSync(newManifest)) fsApi.renameSync(newManifest, movedManifestPath)
-                    if (movedRoot && fsApi.existsSync(newLayout.base) && !fsApi.existsSync(oldDir)) fsApi.renameSync(newLayout.base, oldDir)
-                  } catch { /* preserve original failure; mapping is unchanged */ }
-                  throw e
-                }
-              } else {
-                fsApi.mkdirSync(newLayout.base, { recursive: true })
-              }
-              entry.tag = newTag
-              entry.cacheDir = newLayout.base
-              entry.recordFile = newLayout.recordFile
-              entry.manifestFile = newManifest
-            } else {
-              // 项目：记录文件与清单文件一并更名
-              const oldRecord = entry.recordFile
-              const oldManifest = entry.manifestFile
-              entry.tag = newTag
-              const newLayout = cacheLayoutFor(entry, { harnessRoot })
-              if (oldRecord && fsApi.existsSync(oldRecord) && oldRecord !== newLayout.recordFile) {
-                assertPhysicalPathInside(oldRecord, [path.dirname(oldRecord)], fsApi)
-                assertPhysicalPathInside(newLayout.recordFile, [newLayout.recordDir], fsApi)
-                fsApi.mkdirSync(newLayout.recordDir, { recursive: true })
-                fsApi.renameSync(oldRecord, newLayout.recordFile)
-              }
-              if (oldManifest && fsApi.existsSync(oldManifest)) {
-                const newManifest = path.join(newLayout.recordDir, `${newTag}.清单.md`)
-                assertPhysicalPathInside(oldManifest, [path.dirname(oldManifest)], fsApi)
-                assertPhysicalPathInside(newManifest, [newLayout.recordDir], fsApi)
-                fsApi.renameSync(oldManifest, newManifest)
-              }
-              entry.recordFile = newLayout.recordFile
-              entry.manifestFile = path.join(newLayout.recordDir, `${newTag}.清单.md`)
-            }
+            entry.tag = newTag
             store.upsert(id, entry)
             log(`会话 ${id} 标签 → ${newTag}`)
           }
-          return
-        }
-
-        if (['user/message', 'assistant/message', 'tool/result'].includes(event?.type)) {
-          assertPhysicalPathInside(entry.recordFile, [cacheLayoutFor(entry, { harnessRoot }).base], fsApi)
-          appendRecord(entry.recordFile, event, fsApi)
         }
       } catch (e) {
         ctx.logger?.warn('[conversation-archive] session/event 处理失败:', e?.message)
       }
     })
 
-    // ── 3) 会话结束 → 捕获产物入分类缓存 + 写产物清单 ──
-    ctx.on('session/disposed', (session) => {
-      try {
-        if (writesDisabled || store.isReadOnly()) return
-        const id = String(session?.header?.id ?? session?.id ?? '')
-        const entry = reconcileNativeArchives()[id]
-        if (!entry || dsh.listArchivedIds().includes(id)) return
-        if (config.capture?.enabled === false) return
-        const layout = cacheLayoutFor(entry, { harnessRoot })
-        const valid = validateCacheWrite(id, entry)
-        for (const destination of [layout.recordDir, ...CATEGORY_DIRS.map((name) => layout.categoryDir(name))]) {
-          assertPhysicalPathInside(destination, [valid.layout.base], fsApi)
-        }
-        const end = Date.now()
-        const { copied } = captureSessionFiles(entry.cwd, entry.createdAt, end, layout.base, fsApi, {
-          ...config.capture,
-          importantExts: importantExts(config),
-          categories: config.categories,
-        })
-        if (copied.length > 0) {
-          fsApi.mkdirSync(layout.recordDir, { recursive: true })
-          const lines = ['# 产物清单', '', `会话: ${id}`, `标签: ${entry.tag}`, `捕获时间: ${new Date(end).toLocaleString('zh-CN')}`, '']
-          for (const f of copied) lines.push(`- ${path.relative(layout.base, f)}`)
-          fsApi.writeFileSync(entry.manifestFile, lines.join('\n') + '\n', 'utf8')
-          log(`会话 ${id} 捕获产物 ${copied.length} 项`)
-        }
-      } catch (e) {
-        ctx.logger?.warn('[conversation-archive] session/disposed 处理失败:', e?.message)
-      }
-    })
+    // DSH 原生持久化负责会话内容；插件不监听 disposed 复制或重排文件。
 
     // ── 4) 服务面 ──
     ctx.provide('conversationArchive', {

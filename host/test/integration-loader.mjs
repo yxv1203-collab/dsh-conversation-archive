@@ -54,6 +54,8 @@ const projDir = path.join(tmp, '项目A')
 const statePath = path.join(tmp, 'state.json')
 const backupsDir = path.join(tmp, 'backups')
 const testConfigPath = path.join(tmp, 'test-config.json') // 隔离真实 config.json
+fs.mkdirSync(dailyDir, { recursive: true })
+fs.mkdirSync(path.join(projDir, 'src'), { recursive: true })
 
 const ctx = new Context()
 const toolsRegistered = []
@@ -142,43 +144,35 @@ const waitForNativeCache = async (id, service = svc) => {
   const until = Date.now() + 2500
   while (Date.now() < until) {
     const entry = service.status().archived.find((item) => item.id === id)
-    if (entry?.cachePhase === 'cache-archived') return { ok: true }
+    if (['cache-archived', 'native-archived'].includes(entry?.cachePhase)) return { ok: true }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   return { ok: false, reason: 'archive-cache-timeout' }
 }
 const map = () => { svc.flush(); return JSON.parse(fs.readFileSync(statePath, 'utf8')) }
 
-// ── 场景1：日常会话 + 标题标签 + 区分性 + 记录 + 捕获 ──
+// New sessions follow DSH's native workspace layout. The plugin records only
+// metadata and must not create a mirror cache or category directories.
+const nativeWorkspace = path.join(tmp, '原生工作区')
+fs.mkdirSync(nativeWorkspace, { recursive: true })
+const nativeBefore = fs.readdirSync(nativeWorkspace)
+ctx.emit('session/created', { header: { id: 'native-layout', cwd: nativeWorkspace, createdAt: t0 } })
+const nativeEntry = map()['native-layout']
+if (!nativeEntry || nativeEntry.layoutVersion !== 3 || nativeEntry.cacheDir || nativeEntry.recordFile) throw new Error('新会话必须只登记 DSH 原生元数据')
+if (JSON.stringify(fs.readdirSync(nativeWorkspace)) !== JSON.stringify(nativeBefore)) throw new Error('新会话不得创建插件缓存或分类目录')
+console.log('✓ DSH 原生工作区（不创建镜像缓存或分类目录）')
+
+// ── 场景1：日常会话只登记原生元数据 ──
 ctx.emit('session/created', { header: { id: 'd1', cwd: dailyDir, createdAt: t0 } })
-const base1 = map()['d1'].cacheDir
-for (const sub of ['会话记录', '文档', '代码']) {
-  if (!fs.existsSync(path.join(base1, sub))) throw new Error(`缺分类目录 ${sub}`)
-}
-const d1OldManifest = map()['d1'].manifestFile
-fs.writeFileSync(d1OldManifest, '# old manifest\n')
 ctx.emit('session/event', { header: { id: 'd1', cwd: dailyDir } }, { seq: 1, time: t0 + 1, type: 'session/title', data: { title: '周末闲聊  ' } })
-const base1b = map()['d1'].cacheDir
-const d1Renamed = map()['d1']
-if (!base1b.includes('周末闲聊') || !base1b.endsWith('-d1') || d1Renamed.recordFile !== path.join(base1b, '会话记录', '对话记录.jsonl') || d1Renamed.manifestFile !== path.join(base1b, '会话记录', '周末闲聊.清单.md') || !fs.existsSync(d1Renamed.manifestFile) || fs.existsSync(path.join(base1b, '会话记录', path.basename(d1OldManifest)))) throw new Error('日常标题更名必须重建全部派生路径并迁移清单')
+if (map()['d1'].tag !== '周末闲聊' || map()['d1'].cacheDir || map()['d1'].recordFile) throw new Error('标题只应更新元数据')
 ctx.emit('session/created', { header: { id: 'd2', cwd: dailyDir, createdAt: t0 } })
 ctx.emit('session/event', { header: { id: 'd2', cwd: dailyDir } }, { seq: 1, time: t0 + 2, type: 'session/title', data: { title: '周末闲聊' } })
-const base2 = map()['d2'].cacheDir
-if (!base2.includes('周末闲聊') || base1b === base2 || !base2.endsWith('-d2')) throw new Error('同标题日常会话必须以短会话 id 隔离')
-const collisionA = 'collision-a-abcdef123456'
-const collisionB = 'collision-b-abcdef123456'
-ctx.emit('session/created', { header: { id: collisionA, cwd: dailyDir, createdAt: t0 } })
-ctx.emit('session/created', { header: { id: collisionB, cwd: dailyDir, createdAt: t0 } })
-ctx.emit('session/event', { header: { id: collisionA, cwd: dailyDir } }, { seq: 1, time: t0 + 2, type: 'session/title', data: { title: '短标识冲突' } })
-ctx.emit('session/event', { header: { id: collisionB, cwd: dailyDir } }, { seq: 1, time: t0 + 2, type: 'session/title', data: { title: '短标识冲突' } })
-const collisionMap = map()
-if (collisionMap[collisionA].cacheDir === collisionMap[collisionB].cacheDir || collisionMap[collisionB].cacheKey !== 'abcdef123456-2' || collisionMap[collisionB].recordFile !== path.join(collisionMap[collisionB].cacheDir, '会话记录', '对话记录.jsonl')) throw new Error('日常短标识碰撞必须重建隔离布局')
 ctx.emit('session/event', { header: { id: 'd1', cwd: dailyDir } }, { seq: 2, time: t0 + 3, type: 'user/message', data: { content: '你好' } })
-if (!fs.existsSync(path.join(base1b, '会话记录', '对话记录.jsonl'))) throw new Error('对话记录未写入')
 fs.writeFileSync(path.join(dailyDir, '产出.md'), 'x')
 ctx.emit('session/disposed', { header: { id: 'd1', cwd: dailyDir } })
-if (!fs.existsSync(path.join(base1b, '文档', '产出.md'))) throw new Error('产物未捕获')
-console.log('✓ 日常归档（日期/标签/区分性/记录/捕获）')
+if (fs.readdirSync(dailyDir).some((name) => ['会话记录', '文档', '代码'].includes(name))) throw new Error('会话结束不得复制或分类产出')
+console.log('✓ 日常会话（原生目录 + 元数据标签）')
 
 // Session-created must reject a project root that is a junction outside DSH.
 const junctionProject = path.join(tmp, 'junction-project')
@@ -208,50 +202,45 @@ fs.rmSync(newProjectParentOutside, { recursive: true, force: true })
 fs.rmSync(newProjectTargetOutside, { recursive: true, force: true })
 console.log('✓ newProject（父目录/目标 junction 越界拒绝）')
 
-// ── 场景2：项目会话（.cache\短会话 id，完整分类根）──
+// ── 场景2：项目会话同样不创建插件缓存 ──
 ctx.emit('session/created', { header: { id: 'p1', cwd: path.join(projDir, 'src'), createdAt: t0 } })
 const pEntry = map()['p1']
-if (pEntry.kind !== 'project' || pEntry.root !== projDir || pEntry.cacheDir !== path.join(projDir, '.cache', 'p1')) throw new Error('项目判定或会话根错误')
+if (pEntry.kind !== 'project' || pEntry.root !== projDir || pEntry.layoutVersion !== 3 || pEntry.cacheDir) throw new Error('项目会话必须只登记原生元数据')
 ctx.emit('session/created', { header: { id: 'p2', cwd: path.join(projDir, 'src'), createdAt: t0 } })
 const p2Entry = map()['p2']
-if (p2Entry.cacheDir === pEntry.cacheDir || p2Entry.recordFile === pEntry.recordFile || !fs.existsSync(path.join(p2Entry.cacheDir, '文档'))) throw new Error('项目会话不得共享缓存或分类目录')
-const projectCollisionA = 'project-collision-a-abcdef123456'
-const projectCollisionB = 'project-collision-b-abcdef123456'
-ctx.emit('session/created', { header: { id: projectCollisionA, cwd: path.join(projDir, 'src'), createdAt: t0 } })
-ctx.emit('session/created', { header: { id: projectCollisionB, cwd: path.join(projDir, 'src'), createdAt: t0 } })
-const projectCollisionMap = map()
-if (projectCollisionMap[projectCollisionA].cacheDir === projectCollisionMap[projectCollisionB].cacheDir || projectCollisionMap[projectCollisionB].cacheKey !== 'abcdef123456-2') throw new Error('项目短标识碰撞不得共享缓存根')
+if (p2Entry.layoutVersion !== 3 || p2Entry.cacheDir || fs.existsSync(path.join(projDir, '.cache'))) throw new Error('项目会话不得创建 .cache 或分类目录')
 ctx.emit('session/event', { header: { id: 'p1', cwd: projDir } }, { seq: 1, time: t0 + 1, type: 'session/title', data: { title: '需求讨论' } })
-const pRecord = map()['p1'].recordFile
-if (map()['p1'].cacheDir !== pEntry.cacheDir) throw new Error('项目标题不得重命名会话缓存根')
 ctx.emit('session/event', { header: { id: 'p1', cwd: projDir } }, { seq: 2, time: t0 + 2, type: 'user/message', data: { content: '需求' } })
-if (!fs.existsSync(pRecord)) throw new Error('项目记录未创建')
-console.log('✓ 项目缓存（.cache\\短会话 id\\分类）')
+if (map()['p1'].tag !== '需求讨论' || fs.existsSync(path.join(projDir, '.cache'))) throw new Error('项目标题不得触发文件系统改动')
+console.log('✓ 项目会话（遵循 DSH 原生目录）')
 
 // ── 场景3：服务面（项目环境 + 软归档 + 取消归档 + 彻底删除 + 批处理 + 备份）──
 const proj = svc.newProject('项目B')
-if (!proj.ok || !fs.existsSync(path.join(proj.dir, '.cache'))) throw new Error('新建项目失败')
+if (!proj.ok || !fs.existsSync(proj.dir) || fs.readdirSync(proj.dir).length !== 0) throw new Error('新建项目只能创建一个空项目目录')
 console.log('✓ conversationArchive.newProject')
 
-// 软归档 d1：映射保留、状态 archived、归档夹存在
+// 原生归档 d1：插件只同步状态，不移动或创建工作区文件
 await nativeArchive('d1')
 const a1 = await waitForNativeCache('d1')
 if (!a1.ok) throw new Error('软归档失败: ' + JSON.stringify(a1))
 const e1 = map()['d1']
-if (!e1 || e1.status !== 'archived' || !e1.archivePath) throw new Error('软归档后映射未保留 archived')
-if (!fs.existsSync(e1.archivePath)) throw new Error('归档夹缺失')
-if (fs.existsSync(base1b)) throw new Error('原夹应已移走')
-console.log('✓ 软归档（映射保留 + 完整移入归档区）')
+if (!e1 || e1.layoutVersion !== 3 || e1.cachePhase !== 'native-archived' || e1.archivePath) throw new Error('原生归档不得创建插件归档副本')
+console.log('✓ 原生归档（仅同步 DSH 状态）')
 
 // 取消归档 d1
 const r1 = await svc.restoreSession('d1')
 if (!r1.ok) throw new Error('取消归档失败: ' + JSON.stringify(r1))
-if (map()['d1'].status !== 'active' || !fs.existsSync(base1b)) throw new Error('取消归档后未还原')
-console.log('✓ 取消归档（移回原位）')
+if (ctx.get('workspaceRegistry').archivedSessionIds.includes('d1') || map()['d1'].cacheDir) throw new Error('取消归档后原生状态未还原')
+console.log('✓ 取消归档（DSH 原生状态）')
 
 // 再次归档 + 批处理彻底删除（d1、d2）
 await nativeArchive('d1')
 await nativeArchive('d2')
+for (const id of ['d1', 'd2']) {
+  const dir = fakeSessionDir(id, dailyDir)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'session.jsonl.zstd'), 'native log')
+}
 const pm = await svc.purgeMany(['d1', 'd2'])
 if (!pm.every((r) => r.ok)) throw new Error(`批处理彻底删除失败(retentionCalls=${retentionCalls}): ${JSON.stringify(pm)}`)
 if (map()['d1'] || map()['d2']) throw new Error('彻底删除后映射未清理: ' + JSON.stringify(pm))
@@ -261,14 +250,24 @@ console.log('✓ 批处理彻底删除（purgeMany，真实回收站）')
 // 项目归档 + 取消归档 + 彻底删除
 await nativeArchive('p1'); await waitForNativeCache('p1')
 const ep = map()['p1']
-if (!ep || ep.status !== 'archived' || !fs.existsSync(ep.archivePath)) throw new Error('项目软归档失败')
+if (!ep || ep.layoutVersion !== 3 || ep.archivePath) throw new Error('项目原生归档失败')
 await svc.restoreSession('p1')
-if (!fs.existsSync(map()['p1'].recordFile)) throw new Error('项目取消归档失败')
+if (ctx.get('workspaceRegistry').archivedSessionIds.includes('p1')) throw new Error('项目取消归档失败')
 await nativeArchive('p1')
+const p1SessionDir = fakeSessionDir('p1', path.join(projDir, 'src'))
+fs.mkdirSync(p1SessionDir, { recursive: true })
+fs.writeFileSync(path.join(p1SessionDir, 'session.jsonl.zstd'), 'native log')
 await svc.purgeSession('p1')
 if (map()['p1']) throw new Error('项目彻底删除失败')
 console.log('✓ 项目 归档/取消归档/彻底删除')
 
+// 为剩余原生会话写入 DSH 持久化夹，供备份使用。
+for (const id of ['p2']) {
+  const entry = map()[id]
+  const dir = fakeSessionDir(id, entry.cwd)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'session.jsonl.zstd'), 'native log')
+}
 // 备份（真实 Compress-Archive → 配置的本地目录；服务只返回安全 ID）
 const bk = await svc.backup()
 if (!bk.ok) throw new Error('备份失败: ' + JSON.stringify(bk))
@@ -288,20 +287,19 @@ const nativeOnly = svc.status().archived.find((entry) => entry.id === 'native-on
 if (!nativeOnly || nativeOnly.mappingError !== 'mapping-not-found' || 'archivePath' in nativeOnly) throw new Error('归档列表必须以 DSH 原生状态为准且不得泄露路径')
 const nativeRestore = await svc.restoreSession('native-only')
 if (!nativeRestore.ok || nativeRestore.nativeRestored !== true || ctx.get('workspaceRegistry').archivedSessionIds.includes('native-only')) throw new Error('无本地映射的原生归档必须仍可恢复')
-// DSH 自己的 UI 恢复不经过本插件。事件处理必须当场读取原生归档集，
-// 不能因为旧的 cache status 而停止记录或捕获。
+// DSH 自己的 UI 恢复不经过本插件。事件处理只更新元数据，不能创建缓存。
 ctx.emit('session/created', { header: { id: 'native-ui-restore', cwd: dailyDir, createdAt: t0 } })
 await nativeArchive('native-ui-restore')
 if (!(await waitForNativeCache('native-ui-restore')).ok) throw new Error('native UI restore fixture cache sync failed')
 await nativeUiRestore('native-ui-restore')
 ctx.emit('session/event', { header: { id: 'native-ui-restore', cwd: dailyDir } }, { seq: 1, time: t0 + 1, type: 'user/message', data: { content: '恢复后继续记录' } })
 const uiRestoreEntry = map()['native-ui-restore']
-if (!fs.existsSync(uiRestoreEntry.recordFile) || !fs.readFileSync(uiRestoreEntry.recordFile, 'utf8').includes('恢复后继续记录')) throw new Error('原生 UI 恢复后必须立即继续记录，不能依赖打开 status')
+if (uiRestoreEntry.cacheDir || uiRestoreEntry.recordFile) throw new Error('原生 UI 恢复后不得创建镜像记录')
 const uiRestoreOutput = path.join(dailyDir, 'native-ui-restore-output.md')
 fs.writeFileSync(uiRestoreOutput, 'native UI restore capture')
 ctx.emit('session/disposed', { header: { id: 'native-ui-restore', cwd: dailyDir } })
-if (!fs.existsSync(path.join(uiRestoreEntry.cacheDir, '文档', 'native-ui-restore-output.md'))) throw new Error('原生 UI 恢复后必须立即继续捕获产物')
-console.log('✓ 原生 UI 恢复后立即恢复事件记录')
+if (!fs.existsSync(uiRestoreOutput) || fs.existsSync(path.join(dailyDir, '文档'))) throw new Error('原生 UI 恢复后不得复制或分类产物')
+console.log('✓ 原生 UI 恢复后仍保持 DSH 原生目录')
 console.log('✓ status 视图')
 
 // ── 场景4：管理能力只暴露在原生设置页 ──
@@ -413,13 +411,13 @@ const sanitizedConfig = fs.readFileSync(testConfigPath, 'utf8')
 if (sanitizedConfig.includes('legacy-secret') || sanitizedConfig.includes('legacy-token') || sanitizedConfig.includes('legacy-password') || sanitizedConfig.includes('injected')) throw new Error('saveConfig 必须剥离遗留未知/秘密配置键')
 console.log('✓ HTTP API saveConfig（配置写入并重载）')
 
-// project records are files, so cache deletion must select DeleteFile rather
-// than treating every cache item as a directory.
+// New native-layout sessions have no plugin cache path, and the legacy
+// path-based deletion route remains unavailable.
 ctx.emit('session/created', { header: { id: 'project-file-cache', cwd: path.join(projDir, 'src'), createdAt: t0 } })
 ctx.emit('session/event', { header: { id: 'project-file-cache', cwd: projDir } }, { seq: 1, time: t0 + 1, type: 'user/message', data: { content: 'file cache' } })
 const projectRecordForDelete = map()['project-file-cache'].recordFile
 await call('GET', 'cacheDelete')
-if (apiRes.status !== 404 || !fs.existsSync(projectRecordForDelete)) throw new Error('遗留 cacheDelete 路由必须不存在，客户端不能按路径删除缓存')
+if (apiRes.status !== 404 || projectRecordForDelete || fs.existsSync(path.join(projDir, '.cache'))) throw new Error('遗留 cacheDelete 路由必须不存在，新会话不得生成插件缓存')
 await call('POST', 'backup', {}, { 'content-type': 'text/plain', 'x-conversation-archive-csrf': csrf })
 if (apiRes.status !== 400 || jsonOf().error?.code !== 'invalid-request') throw new Error('API 必须拒绝错误 Content-Type')
 await apiRoute.handler({ url: '/conversation-archive-api?action=backup', method: 'POST', headers: { 'content-type': 'application/json', 'x-conversation-archive-csrf': csrf }, body: '{"selection":{},"selection":{}}' }, fakeRes)
@@ -435,7 +433,7 @@ await nativeArchive('d5'); await nativeArchive('d6')
 await Promise.all([waitForNativeCache('d5'), waitForNativeCache('d6')])
 await call('GET', 'archiveMany')
 if (apiRes.status !== 404 || jsonOf().ok !== false) throw new Error('HTTP 不得提供主动归档入口')
-if (map()['d5'].status !== 'archived' || map()['d6'].status !== 'archived') throw new Error('原生归档后的缓存同步未生效')
+if (map()['d5'].cachePhase !== 'native-archived' || map()['d6'].cachePhase !== 'native-archived') throw new Error('原生归档状态同步未生效')
 await apiPost('restoreMany', { ids: ['d5', 'd5', 'd6'] })
 const restoredBatch = jsonOf().result
 if (restoredBatch.length !== 2 || restoredBatch.some((item) => !item.ok) || ctx.get('workspaceRegistry').archivedSessionIds.includes('d5')) throw new Error('批量恢复必须去重并返回逐项结果')
@@ -460,19 +458,18 @@ const deletedBatch = jsonOf().result
 if (deletedBatch.length !== 2 || deletedBatch.some((item) => !item.ok) || map().d1 || map().d2 || ctx.get('workspaceRegistry').archivedSessionIds.some((id) => ['d1', 'd2'].includes(id))) throw new Error(`公共批量删除必须逐项完成并清除 DSH 归档状态: ${apiRes.body}`)
 console.log('✓ 原生归档缓存同步与公共批量删除（HTTP 无主动归档）')
 
-// ── 场景7：会话联动（DSH 会话目录移动/恢复/回收）+ 活动拦截 + 重要文件保护 ──
+// ── 场景7：原生会话目录回收 + 工作区重要文件保护 ──
 ctx.emit('session/created', { header: { id: 'd7', cwd: dailyDir, createdAt: t0 } })
 ctx.emit('session/event', { header: { id: 'd7', cwd: dailyDir } }, { seq: 1, time: t0 + 1, type: 'session/title', data: { title: '报告7' } })
-const d7Cache = map()['d7'].cacheDir
-fs.mkdirSync(path.join(d7Cache, '文档'), { recursive: true })
-fs.writeFileSync(path.join(d7Cache, '文档', '报告.docx'), 'x') // 重要文件
+const d7Output = path.join(dailyDir, '报告.docx')
+fs.writeFileSync(d7Output, 'x') // 原生工作区重要文件
 const d7SessionDir = fakeSessionDir('d7', dailyDir)
-fs.mkdirSync(path.join(d7SessionDir, '子'), { recursive: true })
-fs.writeFileSync(path.join(d7SessionDir, '子', 'session.jsonl.zstd'), 'x')
+fs.mkdirSync(d7SessionDir, { recursive: true })
+fs.writeFileSync(path.join(d7SessionDir, 'session.jsonl.zstd'), 'x')
 await nativeArchive('d7'); await waitForNativeCache('d7')
 const d7 = map()['d7']
-if (!fs.existsSync(d7SessionDir) || fs.existsSync(path.join(d7.archivePath, '.dsh-session'))) throw new Error('归档缓存不得移动 DSH 原生会话目录')
-console.log('✓ 归档缓存同步（DSH 会话目录保持原位）')
+if (!fs.existsSync(d7SessionDir) || d7.archivePath || d7.cacheDir) throw new Error('归档不得移动 DSH 会话目录或创建插件缓存')
+console.log('✓ 原生归档同步（不移动文件）')
 
 // 活动会话归档只同步插件缓存，不触碰 DSH 会话目录。
 liveSessions.add('d8')
@@ -480,18 +477,18 @@ ctx.emit('session/created', { header: { id: 'd8', cwd: dailyDir, createdAt: t0 }
 await nativeArchive('d8')
 const a8 = await waitForNativeCache('d8')
 if (!a8.ok) throw new Error('活动会话缓存同步失败: ' + JSON.stringify(a8))
-if (map()['d8'].status !== 'archived') throw new Error('活动会话归档未进入已归档')
+if (map()['d8'].cachePhase !== 'native-archived') throw new Error('活动会话归档未进入已归档')
 const d8Sess = fakeSessionDir('d8', dailyDir)
 fs.mkdirSync(d8Sess, { recursive: true })
 fs.writeFileSync(path.join(d8Sess, 'session.jsonl.zstd'), 'x')
 liveSessions.delete('d8') // 会话关闭后
 await waitForNativeCache('d8')
-if (!fs.existsSync(d8Sess) || fs.existsSync(path.join(map()['d8'].archivePath, '.dsh-session'))) throw new Error('重复同步不得移动 DSH 会话')
+if (!fs.existsSync(d8Sess) || map()['d8'].archivePath || map()['d8'].cacheDir) throw new Error('重复同步不得移动 DSH 会话或创建缓存')
 console.log('✓ 活动会话归档（无 pending、无 DSH 文件移动）')
 
 // 取消归档只恢复 DSH 原生状态与插件缓存，原生会话目录始终原位。
 await svc.restoreSession('d7')
-if (!fs.existsSync(d7SessionDir) || !fs.existsSync(path.join(d7SessionDir, '子', 'session.jsonl.zstd'))) throw new Error('取消归档未恢复 DSH 会话目录')
+if (!fs.existsSync(d7SessionDir) || !fs.existsSync(path.join(d7SessionDir, 'session.jsonl.zstd'))) throw new Error('取消归档不得改变 DSH 会话目录')
 console.log('✓ 取消归档（DSH 会话目录始终原位）')
 
 // 再次归档并彻底删除 → 重要文件保护
@@ -499,7 +496,7 @@ await nativeArchive('d7')
 await svc.purgeSession('d7')
 if (ctx.get('workspaceRegistry').archivedSessionIds.includes('d7')) throw new Error('最终删除成功后必须移除 DSH 原生归档 id')
 const retainedIndex = JSON.parse(fs.readFileSync(path.join(tmp, 'retained.json'), 'utf8'))
-const retainedRecord = Object.values(retainedIndex.files).find((item) => item.sources.some((source) => source.sessionId === 'd7' && source.originalRelativePath === path.join('文档', '报告.docx')))
+const retainedRecord = Object.values(retainedIndex.files).find((item) => item.sources.some((source) => source.sessionId === 'd7' && source.originalRelativePath === '报告.docx'))
 if (!retainedRecord || !fs.existsSync(retainedRecord.path)) throw new Error('重要文件未保留到全局库')
 console.log('✓ AI 重要文件保留（彻底删除后仍在全局保护库）')
 
@@ -552,7 +549,7 @@ const makeIsolatedContext = async (root, isolatedState, isolatedConfig, locate, 
   if (runtimeRecycle) isolated.provide('conversationArchiveRecycle', runtimeRecycle)
   if (runtimeDshRecycle) isolated.provide('conversationArchiveDshRecycle', runtimeDshRecycle)
   await isolated.plugin(Loader, { baseUrl: new URL('../', resolveDshPackage('@deepseek-ai/cordis-plugin-loader')).href })
-  await isolated.loader.create({ id: `conversation-archive-safe-${path.basename(root)}`, name: PLUGIN_URL, config: { harnessRoot: root, statePath: isolatedState, configPath: isolatedConfig, ...pluginPatch } })
+  await isolated.loader.create({ id: `conversation-archive-safe-${path.basename(root)}`, name: PLUGIN_URL, config: { harnessRoot: root, statePath: isolatedState, configPath: isolatedConfig, updateCheck: { enabled: false }, ...pluginPatch } })
   await isolated.loader.await()
   return { context: isolated, workspaceRegistry, service: isolated.get('conversationArchive'), route: routes.find((item) => item.path === '/conversation-archive-api') }
 }
@@ -624,54 +621,6 @@ if (!fs.existsSync(cancelLog) || JSON.parse(fs.readFileSync(path.join(cancelRoot
 await cancelRestart.context.fiber.dispose()
 console.log('✓ 删除排队后在 DSH 原生恢复：旧意图自动取消，不会在再次归档后误删')
 
-// Reconciliation may move a cache after purge has read its active mapping but
-// before it checks the active directory. Trigger the real host-side sync from
-// that exact check and prove purge re-reads the now-archived mapping instead
-// of falling through to the native-only path and leaving the archive behind.
-const reconcileRaceRoot = path.join(tmp, 'reconcile-race')
-const reconcileRaceState = path.join(reconcileRaceRoot, 'state.json')
-const reconcileRaceConfig = path.join(reconcileRaceRoot, 'config.json')
-const reconcileRaceDaily = path.join(reconcileRaceRoot, 'daily_conversation')
-const reconcileRaceId = 'reconcile-race-session'
-let reconcileRaceTarget = ''
-let reconcileRaceEnabled = false
-let reconcileRaceInterleaved = false
-let reconcileRaceSync = null
-let reconcileRaceService = null
-const reconcileRaceFs = Object.create(fs)
-reconcileRaceFs.existsSync = (target) => {
-  if (reconcileRaceEnabled && !reconcileRaceInterleaved && path.resolve(target) === path.resolve(reconcileRaceTarget)) {
-    reconcileRaceInterleaved = true
-    reconcileRaceSync = reconcileRaceService.syncArchivedCaches()
-  }
-  return fs.existsSync(target)
-}
-const reconcileRaceLogs = path.join(reconcileRaceRoot, 'dsh-sessions')
-const reconcileRace = await makeIsolatedContext(reconcileRaceRoot, reconcileRaceState, reconcileRaceConfig,
-  (meta) => ({ path: path.join(reconcileRaceLogs, fakeSessionProjectKey(meta.cwd), String(meta.id), 'session.jsonl.zstd') }), {
-    fsApi: reconcileRaceFs,
-    updateCheck: { enabled: false },
-    recycle: async (target) => { fs.rmSync(target, { recursive: true, force: true }); return { ok: true } },
-    dshRecycle: async (target) => { fs.rmSync(target, { recursive: true, force: true }); return { ok: true } },
-  })
-reconcileRaceService = reconcileRace.service
-reconcileRace.context.emit('session/created', { header: { id: reconcileRaceId, cwd: reconcileRaceDaily, createdAt: t0 } })
-reconcileRaceService.flush()
-const reconcileRaceEntry = JSON.parse(fs.readFileSync(reconcileRaceState, 'utf8'))[reconcileRaceId]
-reconcileRaceTarget = reconcileRaceEntry.cacheDir
-fs.writeFileSync(path.join(reconcileRaceTarget, '文档', '最终成果.md'), 'must survive the review before cache recycle')
-const reconcileRaceLog = path.join(reconcileRaceLogs, fakeSessionProjectKey(reconcileRaceDaily), reconcileRaceId, 'session.jsonl.zstd')
-fs.mkdirSync(path.dirname(reconcileRaceLog), { recursive: true })
-fs.writeFileSync(reconcileRaceLog, 'native session log')
-reconcileRaceEnabled = true
-await reconcileRace.workspaceRegistry.archiveSession(reconcileRaceId)
-reconcileRaceFs.existsSync(reconcileRaceTarget)
-const reconcileRaceResult = await reconcileRaceService.purgeSession(reconcileRaceId)
-if (reconcileRaceSync) await reconcileRaceSync
-const reconcileRaceArchive = path.join(reconcileRaceRoot, '对话归档', '日常', reconcileRaceEntry.date, path.basename(reconcileRaceTarget))
-if (!reconcileRaceInterleaved || !reconcileRaceResult.ok || fs.existsSync(reconcileRaceArchive) || reconcileRace.workspaceRegistry.archivedSessionIds.includes(reconcileRaceId)) throw new Error(`缓存同步插入 purge 后必须重新读取已归档映射并完整回收: ${JSON.stringify(reconcileRaceResult)}`)
-console.log('✓ 归档缓存同步与 purge 快照交错（重新读取注册归档根）')
-
 // A purge keeps its preflight map while retention/recycle work awaits. Force
 // the normal archive-cache synchronizer to archive a second native session in
 // that window. The first purge must remove only its own entry from the latest
@@ -700,6 +649,7 @@ const lostUpdate = await makeIsolatedContext(lostUpdateRoot, lostUpdateState, lo
     },
   })
 lostUpdateService = lostUpdate.service
+fs.mkdirSync(lostUpdateDaily, { recursive: true })
 for (const id of [purgeRaceId, reconcileRaceId2]) {
   lostUpdate.context.emit('session/created', { header: { id, cwd: lostUpdateDaily, createdAt: t0 } })
   const log = path.join(lostUpdateLogs, fakeSessionProjectKey(lostUpdateDaily), id, 'session.jsonl.zstd')
@@ -710,13 +660,14 @@ lostUpdateService.flush()
 await lostUpdate.workspaceRegistry.archiveSession(purgeRaceId)
 await lostUpdateService.syncArchivedCaches()
 const firstArchived = JSON.parse(fs.readFileSync(lostUpdateState, 'utf8'))[purgeRaceId]
-fs.writeFileSync(path.join(firstArchived.archivePath, '文档', '最终成果.md'), 'retention makes this purge asynchronous')
+if (firstArchived.layoutVersion !== 3 || firstArchived.archivePath || firstArchived.cacheDir) throw new Error('并发测试必须使用 DSH 原生布局')
+fs.writeFileSync(path.join(lostUpdateDaily, '最终成果.md'), 'retention makes this purge asynchronous')
 await lostUpdate.workspaceRegistry.archiveSession(reconcileRaceId2)
 const lostUpdateResult = await lostUpdateService.purgeSession(purgeRaceId)
 lostUpdateService.flush()
 const lostUpdateMap = JSON.parse(fs.readFileSync(lostUpdateState, 'utf8'))
 const secondAfterRace = lostUpdateMap[reconcileRaceId2]
-if (!lostUpdateInterleaved || !lostUpdateResult.ok || lostUpdateMap[purgeRaceId] || !secondAfterRace || secondAfterRace.status !== 'archived' || !secondAfterRace.archivePath || !fs.existsSync(secondAfterRace.archivePath)) throw new Error(`purge 完成不得覆盖并发归档映射: ${JSON.stringify({ lostUpdateInterleaved, lostUpdateResult, secondAfterRace })}`)
+if (!lostUpdateInterleaved || !lostUpdateResult.ok || lostUpdateMap[purgeRaceId] || !secondAfterRace || secondAfterRace.cachePhase !== 'native-archived' || secondAfterRace.archivePath || secondAfterRace.cacheDir) throw new Error(`purge 完成不得覆盖并发归档映射: ${JSON.stringify({ lostUpdateInterleaved, lostUpdateResult, secondAfterRace })}`)
 console.log('✓ purge 终态合并保留并发归档映射')
 
 // Every GET is a snapshot: legacy state must be normalized at boot, and native
@@ -826,7 +777,7 @@ const recycleFailureLogs = path.join(recycleFailureRoot, 'dsh-sessions')
 const recycleFailure = await makeIsolatedContext(recycleFailureRoot, recycleFailureState, recycleFailureConfig, (meta) => ({ path: path.join(recycleFailureLogs, fakeSessionProjectKey(meta.cwd), String(meta.id), 'session.jsonl.zstd') }), {
   sessionPersistence: { root: recycleFailureLogs, compression: 'zstd' },
   purge: { deleteDshSession: false },
-  recycle: async () => ({ ok: false, error: 'injected-recycle-failure' }),
+  dshRecycle: async () => ({ ok: false, error: 'injected-recycle-failure' }),
 })
 const recycleFailureDaily = path.join(recycleFailureRoot, 'daily_conversation')
 fs.mkdirSync(recycleFailureDaily, { recursive: true })
@@ -839,8 +790,8 @@ const recycleFailureResult = await recycleFailure.service.purgeSession('recycle-
 if (recycleFailureResult.ok || !recycleFailure.workspaceRegistry.archivedSessionIds.includes('recycle-failure-session')) throw new Error('回收失败必须保留 DSH 原生归档状态')
 console.log('✓ 回收失败保留原生归档状态')
 
-// Once plugin cache recycle has succeeded, an independently failing DSH-log
-// recycle must keep native archive truth and persist a recoverable block.
+// Native-layout deletion has one filesystem target. A failed DSH-log recycle
+// leaves both the log and archive state intact, so restore remains safe.
 const dshPartialRoot = path.join(tmp, 'dsh-log-partial')
 const dshPartialState = path.join(dshPartialRoot, 'state.json')
 const dshPartialConfig = path.join(dshPartialRoot, 'config.json')
@@ -865,10 +816,10 @@ fs.writeFileSync(dshPartialLog, 'native log')
 await dshPartial.workspaceRegistry.archiveSession('dsh-log-partial-session')
 const dshPartialResult = await dshPartial.service.purgeSession('dsh-log-partial-session')
 const dshPartialStatus = JSON.parse(fs.readFileSync(path.join(dshPartialRoot, 'status.json'), 'utf8')).purgePending
-if (dshPartialResult.ok || dshPartialResult.partialPhase !== 'cache-recycled-dsh-pending' || !dshPartial.workspaceRegistry.archivedSessionIds.includes('dsh-log-partial-session') || dshPartialStatus?.phase !== 'cache-recycled-dsh-pending') throw new Error('DSH 日志回收失败必须持久化部分阶段并保留原生归档: ' + JSON.stringify({ dshPartialResult, archived: dshPartial.workspaceRegistry.archivedSessionIds, dshPartialStatus }))
-const blockedRestore = await dshPartial.service.restoreSession('dsh-log-partial-session')
-if (blockedRestore.ok || blockedRestore.reason !== 'purge-partial-recovery-pending') throw new Error('部分删除阶段不得误导性恢复会话')
-console.log('✓ DSH 日志回收失败（部分阶段可恢复且阻止恢复）')
+if (dshPartialResult.ok || !fs.existsSync(dshPartialLog) || !dshPartial.workspaceRegistry.archivedSessionIds.includes('dsh-log-partial-session') || dshPartialStatus) throw new Error('DSH 日志回收失败必须保持数据与原生归档可重试: ' + JSON.stringify({ dshPartialResult, archived: dshPartial.workspaceRegistry.archivedSessionIds, dshPartialStatus }))
+const safeRestore = await dshPartial.service.restoreSession('dsh-log-partial-session')
+if (!safeRestore.ok || dshPartial.workspaceRegistry.archivedSessionIds.includes('dsh-log-partial-session')) throw new Error('零删除失败后必须仍可安全恢复会话')
+console.log('✓ DSH 日志回收失败（零删除且可安全恢复）')
 
 const brokenRoot = path.join(tmp, 'broken-boot')
 const brokenState = path.join(brokenRoot, 'state.json')
@@ -959,7 +910,7 @@ fs.writeFileSync(purgeFailureLog, 'native log')
 await purgeFailure.workspaceRegistry.archiveSession('purge-failure-session')
 const purgeFailureStatus = path.join(path.dirname(purgeFailureState), 'status.json')
 await new Promise((resolve) => setTimeout(resolve, 1300)) // let mapping flush and public archive reconciliation finish before the final purge commit failure
-if (JSON.parse(fs.readFileSync(purgeFailureState, 'utf8'))['purge-failure-session']?.status !== 'archived') throw new Error('purge failure fixture was not reconciled before fault injection')
+if (JSON.parse(fs.readFileSync(purgeFailureState, 'utf8'))['purge-failure-session']?.cachePhase !== 'native-archived') throw new Error('purge failure fixture was not reconciled before fault injection')
 failPurgeStateCommit = true
 const purgeFailureResult = await purgeFailure.service.purgeSession('purge-failure-session')
 if (purgeFailureResult.ok || !JSON.parse(fs.readFileSync(purgeFailureStatus, 'utf8')).purgePending) throw new Error('持久化失败时 purge 必须保留可恢复意图: ' + JSON.stringify(purgeFailureResult) + ' status=' + fs.readFileSync(purgeFailureStatus, 'utf8'))
