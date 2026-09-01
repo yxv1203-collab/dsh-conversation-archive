@@ -1,7 +1,7 @@
 /**
  * dsh-conversation-archive · 纯逻辑核心 v3（不依赖 Cordis，便于单元测试）
- * 需求 v3：归档=软归档（完整保留、可恢复、可彻底删除进回收站）；取消归档/彻底删除/批处理；
- * 备份/同步可选（开关+目标目录用户配置）；配置化分类/捕获/策略；修复已知 bug。
+ * 需求 v3：以 DSH 原生归档为状态源，提供恢复、彻底删除、重要文件保护与本地备份。
+ * 旧版镜像缓存相关函数只负责安全迁移既有数据；新会话不创建额外目录或重排工作区。
  */
 import path from 'node:path'
 import fs from 'node:fs'
@@ -26,7 +26,7 @@ export const DEFAULTS = {
   backup: { enabled: false, mode: 'off', targetDir: '', autoIntervalDays: 0, keepCount: 5 }, // periodic / shutdown / off
   remind: { intervalDays: 1 },          // 提醒频率（天），可自由设置（如 1/2/3…）
   retention: { enabled: true, maxCandidates: 40, maxCandidateBytes: 8 * 1024 * 1024, maxExcerptChars: 3000, timeoutMs: 20000 },
-  updateCheck: { enabled: true },       // Task 10 only checks/presents release updates; no silent update.
+  updateCheck: { enabled: true },       // Only checks and presents releases; never updates silently.
   debugMarkers: false,                  // 是否写诊断标记文件（默认关）
 }
 
@@ -288,7 +288,7 @@ export function validateSessionEntry(sessionId, entry, { harnessRoot, config = D
     if (![2, 3].includes(entry.layoutVersion)) return { ok: false, reason: 'legacy-shared-project-cache' }
   }
   if (entry.layoutVersion === 3) {
-    if (!Number.isFinite(Number(entry.createdAt)) || typeof entry.cwd !== 'string' || !isPathInside(root, entry.cwd)) return { ok: false, reason: 'invalid-session-entry' }
+    if (!Number.isFinite(Number(entry.createdAt)) || typeof entry.cwd !== 'string' || (!samePath(root, entry.cwd) && !isPathInside(root, entry.cwd))) return { ok: false, reason: 'invalid-session-entry' }
     if (['cacheDir', 'recordFile', 'manifestFile', 'archivePath', 'cacheKey'].some((key) => entry[key] !== undefined)) return { ok: false, reason: 'invalid-session-entry' }
     if (entry.status !== 'active') return { ok: false, reason: 'invalid-session-entry' }
     return { ok: true, layout: null, archiveRoot: path.join(root, config.archiveDirName || DEFAULTS.archiveDirName) }
@@ -510,8 +510,8 @@ export function dateStr(date = new Date()) {
 }
 
 /**
- * 判定 cwd 属于哪个区域：
- * - daily / project(root=最近深度1祖先) / harness-root / outside
+ * 判定 cwd 属于哪个区域：工作区根目录本身就是日常对话区，
+ * 用户无需为普通对话预先创建项目文件夹。
  */
 export function classifyWorkspace(cwd, opts = {}) {
   const harnessRoot = path.resolve(opts.harnessRoot || DEFAULTS.harnessRoot)
@@ -522,7 +522,7 @@ export function classifyWorkspace(cwd, opts = {}) {
   const under = (base) => p === base || p.startsWith(base + sep)
   if (under(daily)) return { kind: 'daily' }
   if (!under(harnessRoot)) return { kind: 'outside' }
-  if (p === harnessRoot) return { kind: 'harness-root' }
+  if (p === harnessRoot) return { kind: 'daily' }
   const rel = path.relative(harnessRoot, p).split(path.sep)[0]
   return { kind: 'project', root: path.resolve(harnessRoot, rel) }
 }
@@ -580,23 +580,8 @@ export function cacheLayoutFor(entry, opts = {}) {
   }
 }
 
-/** 创建旧版 v2 缓存布局；新会话使用 DSH 原生布局，不调用此函数。 */
-export function ensureCacheLayout(layout, fsApi, lazy = false) {
-  fsApi.mkdirSync(layout.base, { recursive: true })
-  fsApi.mkdirSync(layout.recordDir, { recursive: true })
-  if (!lazy) {
-    for (const c of CATEGORY_DIRS) fsApi.mkdirSync(layout.categoryDir(c), { recursive: true })
-  }
-}
-
-export function appendRecord(recordFile, event, fsApi) {
-  const line = JSON.stringify({ seq: event.seq, time: event.time, type: event.type, data: event.data })
-  fsApi.appendFileSync(recordFile, line + '\n', 'utf8')
-}
-
-/** 跳过目录与日期目录（捕获扫描用） */
+/** AI 保留文件扫描排除的依赖、缓存和构建目录。 */
 const SKIP_DIRS = new Set(['.git', '.dsh', 'node_modules', '.cache', 'dist', 'build', '.venv', 'venv', '__pycache__', '.idea', '.vscode', '.next', 'target'])
-const DATE_DIR_RE = /^\d{4}-\d{2}-\d{2}$/
 const RETENTION_SKIP_DIRS = new Set([...SKIP_DIRS, '会话记录', '日志'])
 const RETENTION_SKIP_EXTS = new Set(['.tmp', '.temp', '.log', '.out', '.err'])
 const TEXT_RETENTION_EXTS = new Set(['.txt', '.md', '.csv', '.json', '.yaml', '.yml', '.toml', '.ini', '.xml', '.html', '.css', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.php', '.rb', '.sql', '.sh', '.ps1', '.bat', '.cmd'])
@@ -1063,91 +1048,6 @@ export function markRetentionReminderSeen(statusPath, { stateRoot, fsApi, now = 
   } catch (e) { return { ok: false, reason: e.message || 'retention-reminder-write-failed' } }
 }
 
-function fileMd5(fsApi, file) {
-  try {
-    return crypto.createHash('md5').update(fsApi.readFileSync(file)).digest('hex')
-  } catch {
-    return ''
-  }
-}
-
-/**
- * 旧版 v2 产物捕获兼容函数；新会话不会复制或分类工作区文件。
- * dedup=true 时：目标同名文件若大小+md5 相同则跳过（避免重复存储）。
- */
-export function captureSessionFiles(cwd, start, end, destRoot, fsApi, opts = {}) {
-  const copied = []
-  const skipped = []
-  const maxDepth = opts.maxDepth ?? 4
-  const maxSize = opts.maxSize ?? 10 * 1024 * 1024
-  const margin = opts.margin ?? 5 * 60 * 1000
-  const dedup = opts.dedup ?? true
-  const t0 = start - margin
-  const t1 = (end ?? Date.now()) + margin
-  const exts = opts.importantExts || defaultImportantExts()
-  const destAbs = path.resolve(destRoot)
-  const categories = normalizeCategories(opts.categories)
-
-  // destRoot is the authority supplied by the registered session layout. If it
-  // already exists as a reparse point, fail closed before any mkdir/copy.
-  try {
-    if (fsApi.existsSync(destAbs)) {
-      const st = fsApi.lstatSync(destAbs)
-      if (!st.isDirectory() || st.isSymbolicLink?.()) return { copied, skipped }
-    }
-  } catch { return { copied, skipped } }
-
-  const walk = (dir, depth) => {
-    if (depth > maxDepth) return
-    let entries
-    try { entries = fsApi.readdirSync(dir, { withFileTypes: true }) } catch { return }
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name)
-      if (path.resolve(full) === destAbs || path.resolve(full).startsWith(destAbs + path.sep)) continue
-      if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name) || DATE_DIR_RE.test(ent.name)) continue
-        walk(full, depth + 1)
-        continue
-      }
-      const ext = path.extname(ent.name).toLowerCase()
-      if (!exts.includes(ext)) continue
-      let st
-      try { st = fsApi.statSync(full) } catch { continue }
-      if (!st.isFile() || st.size > maxSize) continue
-      if (st.mtimeMs < t0 || st.mtimeMs > t1) continue
-      const cat = categoryOf(ent.name, categories)
-      const targetDir = path.join(destRoot, cat)
-      try {
-        assertPhysicalPathInside(targetDir, [destAbs], fsApi)
-      } catch { continue }
-      try { fsApi.mkdirSync(targetDir, { recursive: true }) } catch { continue }
-      let dest = path.join(targetDir, ent.name)
-      let n = 1
-      try { assertPhysicalPathInside(dest, [destAbs], fsApi) } catch { continue }
-      let invalidDestination = false
-      while (fsApi.existsSync(dest)) {
-        // 去重：同名且内容一致 → 跳过
-        if (dedup && fsApi.existsSync(dest)) {
-          try {
-            const a = fsApi.statSync(full), b = fsApi.statSync(dest)
-            if (a.size === b.size && fileMd5(fsApi, full) === fileMd5(fsApi, dest)) { skipped.push(dest); break }
-          } catch { /* 比较失败则按重名处理 */ }
-        }
-        n += 1
-        dest = path.join(targetDir, `${path.parse(ent.name).name}-${n}${path.extname(ent.name)}`)
-        try { assertPhysicalPathInside(dest, [destAbs], fsApi) } catch { invalidDestination = true; break }
-      }
-      if (invalidDestination || fsApi.existsSync(dest)) continue
-      try {
-        fsApi.copyFileSync(full, dest)
-        copied.push(dest)
-      } catch { /* 单文件失败不阻断 */ }
-    }
-  }
-  if (cwd && fsApi.existsSync(cwd)) walk(cwd, 0)
-  return { copied, skipped }
-}
-
 export function loadMapping(statePath, fsApi, onError = () => {}) {
   try {
     const { schemaVersion: _schemaVersion, ...mapping } = loadVersionedJson(statePath, { schemaVersion: 1 }, migrateLegacyV031, fsApi)
@@ -1166,24 +1066,6 @@ export function saveMapping(statePath, map, fsApi) {
 
 export function isSafeSessionId(id) {
   return typeof id === 'string' && id.length > 0 && !['schemaVersion', '__proto__', 'prototype', 'constructor', '.', '..'].includes(id) && !/[\\/\u0000]/.test(id)
-}
-
-/** 创建项目/子项目环境；文件组织完全交给 DSH 和用户。 */
-export function createProjectEnv(root, name, fsApi, opts = {}) {
-  const rootAbs = path.resolve(root)
-  let rootStat
-  try { rootStat = fsApi.lstatSync(rootAbs) } catch { throw new Error(`工作区根目录不可用: ${rootAbs}`) }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink?.()) throw new Error(`工作区根目录不可用: ${rootAbs}`)
-  const parent = opts.parentProject ? sanitizeName(opts.parentProject) : ''
-  const clean = sanitizeName(name)
-  if (!clean) throw new Error(`项目名不能为空或全为非法字符: ${name}`)
-  const base = parent ? path.join(rootAbs, parent) : rootAbs
-  if (!fsApi.existsSync(base)) throw new Error(`父目录不存在: ${base}`)
-  if (parent) assertPhysicalPathInside(base, [rootAbs], fsApi)
-  const dir = path.join(base, clean)
-  assertPhysicalPathInside(dir, [base], fsApi)
-  fsApi.mkdirSync(dir, { recursive: true })
-  return { dir, kind: parent ? 'subproject' : 'project' }
 }
 
 /** PowerShell 回收站脚本（文件或目录，SendToRecycleBin） */
@@ -1372,7 +1254,7 @@ export async function purgeSessionFlow(sessionId, entry, deps) {
   const recycled = []
   const protectedFiles = []
 
-  // 重要文件防误删：Task 5 retention is a strict pre-recycle transaction.
+  // 重要文件防误删：retention is a strict pre-recycle transaction.
   // The legacy copy fallback remains for callers that have not mounted DSH AI.
   if (target && fsApi.existsSync(target)) {
     if (deps.retain) {
@@ -1926,110 +1808,4 @@ export function orphanGC(mapping, { liveIds = new Set(), persistedIds = new Set(
   }
   if (removed.length > 0) log(`[GC] 清理孤儿映射 ${removed.length} 条: ${removed.map((r) => `${r.id}(${r.reason})`).join(', ')}`)
   return removed
-}
-
-/** 目录总大小（字节） */
-export function dirSize(dir, fsApi) {
-  let total = 0
-  try {
-    for (const ent of fsApi.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, ent.name)
-      try {
-        if (ent.isDirectory()) total += dirSize(p, fsApi)
-        else if (ent.isFile()) total += fsApi.statSync(p).size
-      } catch { /* 忽略 */ }
-    }
-  } catch { /* 忽略 */ }
-  return total
-}
-
-const DATE_DIR_RE_EXPORT = /^\d{4}-\d{2}-\d{2}$/
-
-/**
- * 扫描"可清理缓存"候选（供 AI 审核后删除）：
- * - 项目 .cache 空分类目录 / 日常区空日期目录 / 归档区空目录（安全）
- * - DSH 孤儿会话目录（~/.dsh/sessions 下无映射、非 live、非 persisted）（安全）
- * - 旧备份（保留最近 5 个）（安全）
- * 每项附 path/kind/size/reason；是否删除仍需 AI 审核 + 用户确认。
- */
-export function scanCacheCandidates(deps) {
-  const { fsApi, harnessRoot, config = DEFAULTS, dshHome = '', liveIds = new Set(), persistedIds = new Set(), mapping = {}, log = () => {} } = deps
-  const out = []
-  const push = (p, kind, size, reason) => { try { if (fsApi.existsSync(p)) out.push({ path: p, kind, size, reason }) } catch { /* 忽略 */ } }
-
-  // 1) 只扫描已登记会话根内的空分类目录；绝不把项目共享 .cache
-  // 或旧版未知目录当成插件可删除内容。
-  for (const [id, entry] of Object.entries(mapping || {})) {
-    const valid = validateSessionEntry(id, entry, { harnessRoot, config, mapping })
-    if (!valid.ok || !fsApi.existsSync(valid.layout.base)) continue
-    for (const category of CATEGORY_DIRS) {
-      const candidate = valid.layout.categoryDir(category)
-      try {
-        assertPhysicalPathInside(candidate, [valid.layout.base], fsApi)
-        if (fsApi.existsSync(candidate) && fsApi.readdirSync(candidate).length === 0) push(candidate, 'empty-cache-dir', 0, '会话缓存内空分类目录')
-      } catch { /* ignore untrusted/reparse candidates */ }
-    }
-  }
-  // 2) 日常区空日期目录
-  const dailyDir = path.join(harnessRoot, config.dailyDirName || DEFAULTS.dailyDirName)
-  if (fsApi.existsSync(dailyDir)) {
-    for (const d of fsApi.readdirSync(dailyDir)) {
-      if (!DATE_DIR_RE_EXPORT.test(d)) continue
-      const p = path.join(dailyDir, d)
-      try { if (fsApi.readdirSync(p).length === 0) push(p, 'empty-date-dir', 0, '空日期目录') } catch { /* 忽略 */ }
-    }
-  }
-  // 3) 归档区空目录（递归）
-  const archiveRoot = path.join(harnessRoot, config.archiveDirName || DEFAULTS.archiveDirName)
-  const walkEmpty = (dir) => {
-    if (!fsApi.existsSync(dir)) return
-    let entries = []
-    try { entries = fsApi.readdirSync(dir) } catch { return }
-    for (const n of entries) {
-      const p = path.join(dir, n)
-      let st
-      try { st = fsApi.statSync(p) } catch { continue }
-      if (st.isDirectory()) walkEmpty(p)
-    }
-    try { if (fsApi.readdirSync(dir).length === 0 && dir !== archiveRoot) push(dir, 'empty-archive-dir', 0, '归档区空目录') } catch { /* 忽略 */ }
-  }
-  if (fsApi.existsSync(archiveRoot)) walkEmpty(archiveRoot)
-  // 4) DSH 孤儿会话目录
-  if (dshHome) {
-    const sessionsRoot = path.join(dshHome, 'sessions')
-    if (fsApi.existsSync(sessionsRoot)) {
-      for (const proj of fsApi.readdirSync(sessionsRoot)) {
-        const projDir = path.join(sessionsRoot, proj)
-        try { if (!fsApi.statSync(projDir).isDirectory()) continue } catch { continue }
-        for (const id of fsApi.readdirSync(projDir)) {
-          if (mapping[id]) continue
-          if (liveIds.has(id) || persistedIds.has(id)) continue
-          const p = path.join(projDir, id)
-          try { if (!fsApi.statSync(p).isDirectory()) continue } catch { continue }
-          push(p, 'orphan-dsh-session', dirSize(p, fsApi), '无引用的 DSH 会话缓存（孤儿）')
-        }
-      }
-    }
-  }
-  // 5) 旧备份（按配置保留最近版本）
-  const targetDir = config.backup?.targetDir
-  if (targetDir && fsApi.existsSync(targetDir)) {
-    const zips = fsApi.readdirSync(targetDir).filter((n) => /^conversation-archive-backup-.*\.zip$/i.test(n)).sort()
-    const keep = Math.max(1, Math.min(100, Math.floor(Number(config.backup?.keepCount) || 5)))
-    for (const z of zips.slice(0, Math.max(0, zips.length - keep))) {
-      const p = path.join(targetDir, z)
-      try { push(p, 'old-backup', fsApi.statSync(p).size, '旧备份（保留最近 5 个）') } catch { /* 忽略 */ }
-    }
-  }
-  if (out.length > 0) log(`[缓存清理] 扫描到 ${out.length} 个候选`)
-  return out
-}
-
-/** 删除缓存候选（进回收站）；调用方须先经 AI 审核与用户确认 */
-export async function cacheDelete(target, deps) {
-  const { fsApi, recycle = recyclePath, log = () => {} } = deps
-  if (!target || !fsApi.existsSync(target)) return { ok: false, reason: 'not-found' }
-  const r = await recycle(target)
-  if (r.ok) { log(`[缓存清理-删除] ${target}`); return { ok: true, path: target } }
-  return { ok: false, reason: r.error }
 }

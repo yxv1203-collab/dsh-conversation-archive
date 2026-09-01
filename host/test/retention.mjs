@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { findRetentionCandidates, createRetentionPrompt, parseRetentionDecision, reviewRetentionCandidates, retainReviewedFiles, cacheLayoutFor, ensureCacheLayout, archiveSessionFlow, purgeSessionFlow, loadConfig } from '../lib/core.js'
+import { findRetentionCandidates, createRetentionPrompt, parseRetentionDecision, reviewRetentionCandidates, retainReviewedFiles, cacheLayoutFor, archiveSessionFlow, purgeSessionFlow, loadConfig, CATEGORY_DIRS } from '../lib/core.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dca-retention-'))
 const cache = path.join(root, 'archive')
@@ -101,7 +101,8 @@ try {
   entry.cacheDir = layout.base
   entry.recordFile = layout.recordFile
   entry.manifestFile = path.join(layout.recordDir, `${entry.tag}.清单.md`)
-  ensureCacheLayout(layout, fs)
+  fs.mkdirSync(layout.recordDir, { recursive: true })
+  for (const category of CATEGORY_DIRS) fs.mkdirSync(layout.categoryDir(category), { recursive: true })
   fs.writeFileSync(path.join(layout.base, '文档', '输出.md'), 'important')
   const mapping = { [entry.id]: entry }
   assert.equal(archiveSessionFlow(entry.id, entry, { fsApi: fs, harnessRoot: root, config: loadConfig(fs, {}, ''), mapping }).ok, true)

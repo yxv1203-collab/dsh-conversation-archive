@@ -1,7 +1,7 @@
 /**
  * dsh-conversation-archive · 单元测试 v3（node test/run-tests.mjs）
- * 覆盖：清洗/日期/区域/标签区分性/分类/布局/配置合并/产物捕获(去重)/项目环境/映射/
- *      软归档/取消归档/彻底删除(回收站注入)/批处理/孤儿GC/备份。
+ * 覆盖：清洗/日期/区域/标签区分性/旧布局安全兼容/配置合并/映射/
+ *      原生归档恢复/彻底删除(回收站注入)/批处理/孤儿GC/备份。
  */
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -9,14 +9,13 @@ import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import {
-  sanitizeName, dateStr, classifyWorkspace, uniqueTag, categoryOf, cacheLayoutFor, ensureCacheLayout,
-  captureSessionFiles, loadMapping, saveMapping, loadConfig, normalizeCategories, toJsonSafe,
+  sanitizeName, dateStr, classifyWorkspace, uniqueTag, categoryOf, cacheLayoutFor,
+  loadMapping, saveMapping, loadConfig, normalizeCategories, toJsonSafe,
   atomicWriteJson, loadVersionedJson, isPathInside, assertManagedPath, assertPhysicalPathInside, recycleScript, recyclePath,
   inspectVersionedJson, appendOperation, inspectOperationsLog, validateSessionEntry, validateCacheDeleteTarget, resolveProtectedChild,
   findRetentionCandidates,
   archiveSessionFlow, restoreSessionFlow, purgeSessionFlow, pruneEmptyParents, runMany, orphanGC,
-  createProjectEnv, protectImportantFiles, remindDue, scanImportantInDir,
-  scanCacheCandidates, cacheDelete, CATEGORY_DIRS,
+  protectImportantFiles, remindDue, scanImportantInDir, CATEGORY_DIRS,
 } from '../lib/core.js'
 import { createStateStore } from '../lib/index.js'
 
@@ -64,11 +63,11 @@ test('重要文件候选只包含会话时间窗口内的原生工作区文件',
   assert.deepEqual(candidates.map((item) => item.name), ['本次产出.md'])
 })
 
-test('区域判定 v2（daily/项目深度1/harness-root/outside）', () => {
+test('工作区根目录可直接用于日常对话，不要求用户预建文件夹', () => {
   assert.equal(classifyWorkspace(path.join(DAILY, '2026-08-30'), { harnessRoot: H }).kind, 'daily')
   const r = classifyWorkspace(path.join(H, '项目A', '子项目A1', 'src'), { harnessRoot: H })
   assert.equal(r.kind, 'project'); assert.equal(r.root, path.join(H, '项目A'))
-  assert.equal(classifyWorkspace(H, { harnessRoot: H }).kind, 'harness-root')
+  assert.equal(classifyWorkspace(H, { harnessRoot: H }).kind, 'daily')
   assert.equal(classifyWorkspace(os.tmpdir(), { harnessRoot: H }).kind, 'outside')
 })
 
@@ -117,7 +116,8 @@ function makeV2Entry(id, kind, tag, createdAt = new Date(2026, 7, 30, 10, 5).get
   entry.cacheDir = layout.base
   entry.recordFile = layout.recordFile
   entry.manifestFile = path.join(layout.recordDir, `${tag}.清单.md`)
-  ensureCacheLayout(layout, fs)
+  fs.mkdirSync(layout.recordDir, { recursive: true })
+  for (const category of CATEGORY_DIRS) fs.mkdirSync(layout.categoryDir(category), { recursive: true })
   fs.writeFileSync(entry.recordFile, '{}')
   return entry
 }
@@ -181,7 +181,8 @@ test('归档恢复只清理空后代，绝不删除归档根或工作区根', ()
   entry.cacheDir = layout.base
   entry.recordFile = layout.recordFile
   entry.manifestFile = path.join(layout.recordDir, '边界.清单.md')
-  ensureCacheLayout(layout, fs)
+  fs.mkdirSync(layout.recordDir, { recursive: true })
+  for (const category of CATEGORY_DIRS) fs.mkdirSync(layout.categoryDir(category), { recursive: true })
   fs.writeFileSync(entry.recordFile, '{}')
   const mapping = { [entry.id]: entry }
   const config = loadConfig(fs, { harnessRoot: root }, '')
@@ -363,62 +364,6 @@ test('malformed config and mapping remain readable-disabled instead of throwing'
   assert.equal(mappingError, 'unsupported-state-version')
   assert.equal(fs.readFileSync(configFile, 'utf8'), '{')
   assert.equal(fs.readFileSync(mappingFile, 'utf8'), JSON.stringify({ schemaVersion: 2 }))
-})
-
-test('产物捕获（分类复制 + 内容去重）', () => {
-  const cwd = path.join(tmp, 'proj')
-  fs.mkdirSync(path.join(cwd, 'sub'), { recursive: true })
-  const t0 = Date.now() - 1000
-  fs.writeFileSync(path.join(cwd, 'main.py'), 'x')
-  fs.writeFileSync(path.join(cwd, 'doc.md'), 'x')
-  fs.writeFileSync(path.join(cwd, 'sub', 'data.xlsx'), 'x')
-  fs.writeFileSync(path.join(cwd, 'old.txt'), 'x')
-  fs.utimesSync(path.join(cwd, 'old.txt'), new Date(t0 - 3600e3), new Date(t0 - 3600e3))
-  const dest = path.join(tmp, 'cache-out')
-  const r1 = captureSessionFiles(cwd, t0, t0 + 1000, dest, fs)
-  assert.equal(r1.copied.length, 3)
-  // 再捕获一次（内容相同）→ 去重跳过
-  const r2 = captureSessionFiles(cwd, t0, t0 + 1000, dest, fs, { dedup: true })
-  assert.equal(r2.copied.length, 0)
-  assert.equal(r2.skipped.length, 3)
-})
-
-test('产物捕获忽略越界分类目录配置', () => {
-  const cwd = path.join(tmp, 'unsafe-category-source')
-  fs.mkdirSync(cwd, { recursive: true })
-  const created = Date.now()
-  fs.writeFileSync(path.join(cwd, 'safe.md'), 'safe')
-  const dest = path.join(tmp, 'unsafe-category-dest')
-  const result = captureSessionFiles(cwd, created - 1000, created + 1000, dest, fs, {
-    categories: { '.md': '..\\escaped' },
-  })
-  assert.equal(result.copied.length, 1)
-  assert.ok(fs.existsSync(path.join(dest, '文档', 'safe.md')))
-  assert.ok(!fs.existsSync(path.join(tmp, 'escaped', 'safe.md')), '恶意分类不得写到 destRoot 外')
-})
-
-test('产物捕获拒绝物理越界的分类目录 junction', () => {
-  if (process.platform !== 'win32') return
-  const cwd = path.join(tmp, 'junction-category-source')
-  const dest = path.join(tmp, 'junction-category-dest')
-  const outside = path.join(tmp, 'junction-category-outside')
-  fs.mkdirSync(cwd, { recursive: true })
-  fs.mkdirSync(dest, { recursive: true })
-  fs.mkdirSync(outside, { recursive: true })
-  fs.writeFileSync(path.join(cwd, 'unsafe.md'), 'unsafe')
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `New-Item -ItemType Junction -Path '${path.join(dest, '文档')}' -Target '${outside}' | Out-Null`], { stdio: 'ignore' })
-  const result = captureSessionFiles(cwd, Date.now() - 1000, Date.now() + 1000, dest, fs)
-  assert.equal(result.copied.length, 0)
-  assert.equal(fs.existsSync(path.join(outside, 'unsafe.md')), false)
-})
-
-test('createProjectEnv：项目和子项目只创建原生空目录', () => {
-  const proj = createProjectEnv(H, '项目B', fs)
-  assert.ok(fs.existsSync(proj.dir))
-  assert.deepEqual(fs.readdirSync(proj.dir), [])
-  const sub = createProjectEnv(H, '子项目X', fs, { parentProject: '项目B' })
-  assert.equal(sub.kind, 'subproject')
-  assert.deepEqual(fs.readdirSync(sub.dir), [])
 })
 
 const statePath = path.join(tmp, 'state.json')
@@ -675,53 +620,6 @@ test('remindDue：按天频次判定', () => {
   assert.equal(remindDue(now - (2 * 24 * 3600e3 - 3600e3), loadConfig(fs, { remind: { intervalDays: 2 } }, '')), false, '2 天内不重复')
   assert.equal(remindDue(now - 2 * 24 * 3600e3, loadConfig(fs, { remind: { intervalDays: 2 } }, '')), true, '满 2 天即提醒')
   assert.equal(remindDue(now - 3 * 24 * 3600e3, loadConfig(fs, { remind: { intervalDays: 2 } }, '')), true)
-})
-
-test('缓存清理扫描：只扫描登记会话的空分类/空日期/孤儿会话/旧备份', () => {
-  const scanEntry = makeV2Entry('scan-session-abcdef123456', 'project', '清测')
-  const emptyCat = path.join(scanEntry.cacheDir, '音视频')
-  fs.rmdirSync(emptyCat)
-  fs.mkdirSync(emptyCat, { recursive: true }) // 保持为空
-  // 日常空日期目录
-  fs.mkdirSync(path.join(DAILY, '2025-01-01'), { recursive: true })
-  // DSH 孤儿会话
-  const dshHome = path.join(tmp, 'dsh-home')
-  const orphan = path.join(dshHome, 'sessions', '--proj--', 'orphan-id')
-  fs.mkdirSync(orphan, { recursive: true })
-  fs.writeFileSync(path.join(orphan, 'session.jsonl'), 'x')
-  // 旧备份（4 个，保留 5 个 → 无候选）
-  const bdir = path.join(tmp, 'bk')
-  fs.mkdirSync(bdir, { recursive: true })
-  for (let i = 1; i <= 4; i++) fs.writeFileSync(path.join(bdir, `conversation-archive-backup-2026-01-0${i}.zip`), 'x')
-  const cand = scanCacheCandidates({
-    fsApi: fs, harnessRoot: H, config: loadConfig(fs, { backup: { targetDir: bdir } }, ''),
-    dshHome, liveIds: new Set(), persistedIds: new Set(), mapping: { [scanEntry.id]: scanEntry },
-  })
-  const kinds = cand.map((c) => c.kind).sort()
-  assert.ok(kinds.includes('empty-cache-dir'), '应含空分类目录')
-  assert.ok(kinds.includes('empty-date-dir'), '应含空日期目录')
-  assert.ok(kinds.includes('orphan-dsh-session'), '应含孤儿会话')
-  // 6 个旧备份 → 应给出 1 个候选
-  fs.writeFileSync(path.join(bdir, 'conversation-archive-backup-2026-01-05.zip'), 'x')
-  fs.writeFileSync(path.join(bdir, 'conversation-archive-backup-2026-01-06.zip'), 'x')
-  const cand2 = scanCacheCandidates({
-    fsApi: fs, harnessRoot: H, config: loadConfig(fs, { backup: { targetDir: bdir } }, ''),
-    dshHome, liveIds: new Set(), persistedIds: new Set(), mapping: { [scanEntry.id]: scanEntry },
-  })
-  assert.ok(cand2.some((c) => c.kind === 'old-backup'), '旧备份（>5 个）应产生候选')
-})
-
-test('缓存删除：进回收站（注入）', async () => {
-  const d = path.join(tmp, 'del-me')
-  fs.mkdirSync(d, { recursive: true })
-  fs.writeFileSync(path.join(d, 'x.txt'), 'x')
-  const recycled = []
-  const r = await cacheDelete(d, { fsApi: fs, recycle: async (p) => { recycled.push(p); fs.rmSync(p, { recursive: true, force: true }); return { ok: true } } })
-  assert.equal(r.ok, true)
-  assert.equal(recycled.length, 1)
-  assert.ok(!fs.existsSync(d))
-  const r2 = await cacheDelete(path.join(tmp, 'missing'), { fsApi: fs })
-  assert.equal(r2.ok, false)
 })
 
 let passed = 0

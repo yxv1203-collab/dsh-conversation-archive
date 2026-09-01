@@ -31,7 +31,7 @@ assert.match(source, /role:\s*['"]dialog['"]/, 'marks the modal as a dialog')
 assert.match(source, /['\"]aria-modal['\"]:\s*true/, 'marks the modal modal')
 assert.match(source, /aria-label/, 'labels icon-only controls')
 for (const action of ['status', 'archived', 'retained', 'backups', 'diagnostics', 'restore', 'delete', 'restoreMany', 'deleteMany', 'deletePreview', 'retainedRestore', 'retainedDelete', 'retentionReminderSeen', 'backup', 'backupRestore', 'saveConfig']) {
-  assert.match(source, new RegExp(`['\"]${action}['\"]`), `uses Task 8 action ${action}`)
+  assert.match(source, new RegExp(`['\"]${action}['\"]`), `uses API action ${action}`)
 }
 assert.match(source, /提醒间隔|查看保留文件/, 'groups reminder with retained files')
 for (const label of ['全部对话', '日常对话', '项目对话', '所有项目', '无项目']) {
@@ -49,12 +49,17 @@ assert.match(source, /type:\s*['"]number['"][\s\S]{0,100}max:\s*365/, 'accepts a
 assert.match(source, /workspaces|workspaceRuntime/, 'uses the native DSH workspace service')
 assert.match(source, /pickDirectory/, 'uses the native DSH directory picker instead of free-text-only paths')
 assert.match(source, /本地候选.*candidateCount|candidateCount.*本地候选/, 'delete confirmation reports scanned candidate counts and types')
-for (const setting of ['工作区根目录', '重要文件 AI 保留', 'AI 审核候选上限', '单文件内容上限', '文本抽样字符', 'AI 超时']) {
+for (const setting of ['重要文件 AI 保留', 'AI 审核候选上限', '单文件内容上限', '文本抽样字符', 'AI 超时']) {
   assert.match(source, new RegExp(setting), `shows configurable setting ${setting}`)
 }
+assert.doesNotMatch(source, /工作区根目录|请先.*文件夹|预先.*目录/, 'does not expose obsolete folder prerequisites or absolute workspace paths')
+assert.match(source, /\.dwm-fields\{[^}]*display:grid/, 'uses a responsive grid for aligned settings fields')
+assert.match(source, /dwm-row-actions/, 'groups row actions so long retained-file metadata cannot displace controls')
+assert.doesNotMatch(source, /\[restoreTarget,\s*setRestoreTarget\]|恢复目录（空文件夹）/, 'asks for a restore destination only when the user starts restoring a backup')
+assert.match(source, /backupRestore[\s\S]{0,900}pickDirectory|pickDirectory[\s\S]{0,900}backupRestore/, 'uses the native folder picker in the backup restore flow')
 assert.match(source, /settings\?\.backup.*autoIntervalDays|settings\.backup\.autoIntervalDays/, 'hydrates backup controls from safe status settings')
 assert.match(source, /settings\?\.updateCheck|settings\.updateCheck/, 'hydrates the update-check toggle from safe status settings')
-assert.match(source, /updateCheck:\s*\{\s*enabled/, 'persists update-check preference through Task 8 config API')
+assert.match(source, /updateCheck:\s*\{\s*enabled/, 'persists update-check preference through the config API')
 assert.match(source, /版本状态/, 'shows update-check status')
 assert.match(source, /noopener noreferrer/, 'opens only the server-validated release page safely')
 assert.match(source, /\['session',\s*'单个对话数据'\]/, 'offers native DSH session-data backup scope')

@@ -162,6 +162,14 @@ if (!nativeEntry || nativeEntry.layoutVersion !== 3 || nativeEntry.cacheDir || n
 if (JSON.stringify(fs.readdirSync(nativeWorkspace)) !== JSON.stringify(nativeBefore)) throw new Error('新会话不得创建插件缓存或分类目录')
 console.log('✓ DSH 原生工作区（不创建镜像缓存或分类目录）')
 
+const rootBefore = fs.readdirSync(tmp).sort()
+ctx.emit('session/created', { header: { id: 'root-conversation', cwd: tmp, createdAt: t0 } })
+const rootEntry = map()['root-conversation']
+if (!rootEntry || rootEntry.kind !== 'daily' || rootEntry.cwd !== tmp) throw new Error('工作区根目录中的普通对话必须直接登记')
+if (JSON.stringify(fs.readdirSync(tmp).sort()) !== JSON.stringify(rootBefore)) throw new Error('登记根目录对话不得要求或创建任何前置文件夹')
+if ('newProject' in svc) throw new Error('插件不得公开废弃的自建项目能力')
+console.log('✓ 根目录普通对话无需预建目录，服务面不含自建项目废案')
+
 // ── 场景1：日常会话只登记原生元数据 ──
 ctx.emit('session/created', { header: { id: 'd1', cwd: dailyDir, createdAt: t0 } })
 ctx.emit('session/event', { header: { id: 'd1', cwd: dailyDir } }, { seq: 1, time: t0 + 1, type: 'session/title', data: { title: '周末闲聊  ' } })
@@ -184,24 +192,6 @@ if (map()['junction-project-session'] || fs.existsSync(path.join(junctionProject
 fs.rmSync(junctionProjectOutside, { recursive: true, force: true })
 console.log('✓ session/created（项目 junction 越界拒绝）')
 
-// newProject must reject both a direct-child parent junction and a direct-child
-// target junction before mkdir/write can follow either reparse point.
-const newProjectParent = path.join(tmp, 'junction-project-parent')
-const newProjectParentOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'dca-new-project-parent-outside-'))
-fs.mkdirSync(newProjectParentOutside, { recursive: true })
-execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `New-Item -ItemType Junction -Path '${newProjectParent}' -Target '${newProjectParentOutside}' | Out-Null`], { stdio: 'ignore' })
-const parentProjectResult = svc.newProject('child-project', 'junction-project-parent')
-if (parentProjectResult.ok || fs.existsSync(path.join(newProjectParentOutside, 'child-project'))) throw new Error('newProject 不得跟随父目录 junction 写入')
-const newProjectTarget = path.join(tmp, 'junction-project-target')
-const newProjectTargetOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'dca-new-project-target-outside-'))
-fs.mkdirSync(newProjectTargetOutside, { recursive: true })
-execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `New-Item -ItemType Junction -Path '${newProjectTarget}' -Target '${newProjectTargetOutside}' | Out-Null`], { stdio: 'ignore' })
-const targetProjectResult = svc.newProject('junction-project-target')
-if (targetProjectResult.ok || fs.existsSync(path.join(newProjectTargetOutside, '.cache'))) throw new Error('newProject 不得跟随目标 junction 写入')
-fs.rmSync(newProjectParentOutside, { recursive: true, force: true })
-fs.rmSync(newProjectTargetOutside, { recursive: true, force: true })
-console.log('✓ newProject（父目录/目标 junction 越界拒绝）')
-
 // ── 场景2：项目会话同样不创建插件缓存 ──
 ctx.emit('session/created', { header: { id: 'p1', cwd: path.join(projDir, 'src'), createdAt: t0 } })
 const pEntry = map()['p1']
@@ -214,10 +204,7 @@ ctx.emit('session/event', { header: { id: 'p1', cwd: projDir } }, { seq: 2, time
 if (map()['p1'].tag !== '需求讨论' || fs.existsSync(path.join(projDir, '.cache'))) throw new Error('项目标题不得触发文件系统改动')
 console.log('✓ 项目会话（遵循 DSH 原生目录）')
 
-// ── 场景3：服务面（项目环境 + 软归档 + 取消归档 + 彻底删除 + 批处理 + 备份）──
-const proj = svc.newProject('项目B')
-if (!proj.ok || !fs.existsSync(proj.dir) || fs.readdirSync(proj.dir).length !== 0) throw new Error('新建项目只能创建一个空项目目录')
-console.log('✓ conversationArchive.newProject')
+// ── 场景3：服务面（软归档 + 取消归档 + 彻底删除 + 批处理 + 备份）──
 
 // 原生归档 d1：插件只同步状态，不移动或创建工作区文件
 await nativeArchive('d1')
@@ -846,7 +833,7 @@ fs.writeFileSync(brokenStatusState, JSON.stringify({ schemaVersion: 1 }))
 fs.writeFileSync(brokenStatusConfig, JSON.stringify({ schemaVersion: 1 }))
 fs.writeFileSync(brokenStatusFile, JSON.stringify({ schemaVersion: 2, stale: true }))
 const brokenStatus = await makeIsolatedContext(brokenStatusRoot, brokenStatusState, brokenStatusConfig, () => null)
-if ((await brokenStatus.service.newProject('must-not-write')).ok) throw new Error('损坏 status 时不得执行写操作')
+if (!brokenStatus.service.status().writesDisabled) throw new Error('损坏 status 时必须进入只读保护')
 if (fs.readFileSync(brokenStatusFile, 'utf8') !== JSON.stringify({ schemaVersion: 2, stale: true }) || fs.existsSync(path.join(brokenStatusRoot, '对话归档'))) throw new Error('损坏 status 启动不得迁移或产生写入')
 console.log('✓ 损坏 status 启动（零写入且全局只读）')
 

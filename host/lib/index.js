@@ -1,20 +1,19 @@
 /**
  * dsh-conversation-archive · Cordis Host 插件入口 v3
- * - 根作用域：事件驱动引擎（双区归档/标签/记录/产物捕获）+ 原生设置页服务
+ * - 根作用域：DSH 原生归档管理、重要文件保护、本地备份与设置页服务
  * - agent 预设实例复用根服务，不重复注册模型工具或 slash 命令
- * 归档=软归档（完整保留）；取消归档/彻底删除（进回收站）/批处理；备份可选；配置化；孤儿 GC。
+ * 插件不创建项目、镜像缓存、日期目录或文件分类目录。
  */
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import {
-  DEFAULTS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, normalizeCategories, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, classifyWorkspace, sanitizeName, dateStr, placeholderTag,
+  DEFAULTS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, classifyWorkspace, sanitizeName, dateStr, placeholderTag,
   cacheLayoutFor,
-  loadMapping, saveMapping, validateSessionEntry, validateCacheDeleteTarget, archiveSessionFlow, restoreSessionFlow, purgeSessionFlow,
-  runMany, createBackup, listBackups, restoreBackup, runOverdueBackup, backupScheduleView, resetBackupSchedule, orphanGC, createProjectEnv, recyclePath,
+  loadMapping, saveMapping, validateSessionEntry, archiveSessionFlow, restoreSessionFlow, purgeSessionFlow,
+  runMany, createBackup, listBackups, restoreBackup, runOverdueBackup, backupScheduleView, resetBackupSchedule, orphanGC, recyclePath,
   findRetentionCandidates, reviewRetentionCandidates, retainReviewedFiles, listRetainedFiles, restoreRetainedFile, removeRetainedProvenance, recycleRetainedFile, recoverRetainedRecycle, retentionReminder,
-  scanCacheCandidates, cacheDelete,
 } from './core.js'
 import { createDshAdapter } from './dsh-adapter.js'
 import { checkForUpdate, readReleaseManifest } from './update-check.js'
@@ -122,9 +121,6 @@ function effectiveConfigSections(config) {
   const section = (name) => plainObject(value[name]) ? value[name] : {}
   const bool = (candidate, fallback) => typeof candidate === 'boolean' ? candidate : fallback
   const bounded = (candidate, fallback, min, max) => Number.isInteger(candidate) && candidate >= min && candidate <= max ? candidate : fallback
-  const capture = section('capture')
-  const archive = section('archive')
-  const purge = section('purge')
   const backup = section('backup')
   const remind = section('remind')
   const retention = section('retention')
@@ -132,15 +128,6 @@ function effectiveConfigSections(config) {
   const backupTarget = typeof backup.targetDir === 'string' && !/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(backup.targetDir) && (path.isAbsolute(backup.targetDir) || path.win32.isAbsolute(backup.targetDir)) ? backup.targetDir : DEFAULTS.backup.targetDir
   return {
     harnessRoot: typeof value.harnessRoot === 'string' && (path.isAbsolute(value.harnessRoot) || path.win32.isAbsolute(value.harnessRoot)) ? value.harnessRoot : DEFAULTS.harnessRoot,
-    capture: {
-      enabled: bool(capture.enabled, DEFAULTS.capture.enabled),
-      maxDepth: bounded(capture.maxDepth, DEFAULTS.capture.maxDepth, 0, 20),
-      maxSize: bounded(capture.maxSize, DEFAULTS.capture.maxSize, 1, 1024 * 1024 * 1024),
-      margin: bounded(capture.margin, DEFAULTS.capture.margin, 0, 24 * 60 * 60 * 1000),
-      dedup: bool(capture.dedup, DEFAULTS.capture.dedup),
-    },
-    archive: { moveDshSession: bool(archive.moveDshSession, DEFAULTS.archive.moveDshSession), deleteDshSession: bool(archive.deleteDshSession, DEFAULTS.archive.deleteDshSession) },
-    purge: { deleteDshSession: bool(purge.deleteDshSession, DEFAULTS.purge.deleteDshSession) },
     backup: {
       targetDir: backupTarget,
       enabled: bool(backup.enabled, DEFAULTS.backup.enabled),
@@ -157,7 +144,6 @@ function effectiveConfigSections(config) {
       timeoutMs: bounded(retention.timeoutMs, DEFAULTS.retention.timeoutMs, 1_000, 120_000),
     },
     updateCheck: { enabled: bool(updateCheck.enabled, DEFAULTS.updateCheck.enabled) },
-    categories: normalizeCategories(value.categories),
   }
 }
 
@@ -728,34 +714,6 @@ export default {
         items,
       }
     }
-    const newProject = (name, parent) => {
-      if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }
-      const clean = sanitizeName(name)
-      if (!clean) return { ok: false, reason: 'invalid-name' }
-      try {
-        const r = createProjectEnv(harnessRoot, clean, fsApi, { parentProject: parent, lazy: !config.capture?.enabled })
-        log(`创建${r.kind === 'subproject' ? '子项目' : '项目'}环境: ${r.dir}`)
-        return { ok: true, dir: r.dir, kind: r.kind }
-      } catch (e) {
-        return { ok: false, reason: e.message }
-      }
-    }
-    const archivedFiles = () => {
-      const archiveRoot = path.join(harnessRoot, config.archiveDirName || DEFAULTS.archiveDirName)
-      if (!fsApi.existsSync(archiveRoot)) return { pending: [], archiveRoot }
-      const pending = []
-      for (const zone of fsApi.readdirSync(archiveRoot)) {
-        const z = path.join(archiveRoot, zone)
-        if (!fsApi.statSync(z).isDirectory()) continue
-        for (const group of fsApi.readdirSync(z)) {
-          const dd = path.join(z, group)
-          if (!fsApi.statSync(dd).isDirectory()) continue
-          const items = fsApi.readdirSync(dd)
-          if (items.length > 0) pending.push({ zone, group, items })
-        }
-      }
-      return { pending, archiveRoot }
-    }
     const retainedLibraryDeps = () => ({
       retainedRoot: path.join(harnessRoot, config.protectDirName || DEFAULTS.protectDirName),
       indexPath: retainedIndexPath, deleteOperationPath: retainedDeleteOperationPath, harnessRoot, stateRoot, fsApi,
@@ -849,12 +807,10 @@ export default {
           cachePhase: entry.cachePhase || entry.status || 'tracked',
         }
       })
-      const af = archivedFiles()
       const st = status.read()
       const retained = listRetained()
       const retentionNotice = retentionReminder(retained, { lastRetentionReminderAt: st.lastRetentionReminderAt || 0, config })
       return {
-        archiveRoot: af.archiveRoot,
         remind: retentionNotice.due,
         remindIntervalDays: retentionNotice.intervalDays,
         newProtectedCount: retentionNotice.count,
@@ -864,7 +820,6 @@ export default {
         compatibility: dsh.compatibility(),
          invalidEntries,
         retained,
-        protected: retained,
         backupConfigured: !!config.backup?.targetDir,
         backupTargetConfigured: !!config.backup?.targetDir,
         backupEnabled: config.backup?.enabled !== false,
@@ -872,10 +827,6 @@ export default {
         backupKeepCount: config.backup?.keepCount || 5,
         backupSchedule: { ...backupScheduleView(backupDeps()), lastResult: st.lastBackupResult || null },
         backups: backupSnapshot,
-        captureEnabled: config.capture?.enabled !== false,
-        archiveMoveDshSession: config.archive?.moveDshSession !== false,
-        archiveDeleteDshSession: config.archive?.deleteDshSession === true,
-        purgeDeleteDshSession: config.purge?.deleteDshSession !== false,
         pendingDeletionCount: queued.size,
         updateCheck: updateSnapshot,
         writesDisabled: writesDisabled || store.isReadOnly(),
@@ -933,11 +884,7 @@ export default {
         const header = session.header || {}
         const cls = classifyWorkspace(header.cwd, { harnessRoot })
         if (cls.kind === 'outside') return
-        if (cls.kind === 'harness-root') {
-          log(`cwd=${header.cwd} 位于 DeepSeek Harness 根目录：请先手动创建项目文件夹后在其中新建对话`)
-          return
-        }
-        assertPhysicalPathInside(header.cwd, [harnessRoot], fsApi)
+        if (path.resolve(header.cwd) !== harnessRoot) assertPhysicalPathInside(header.cwd, [harnessRoot], fsApi)
         if (cls.kind === 'project') assertPhysicalPathInside(cls.root, [harnessRoot], fsApi)
         const id = String(header.id)
         if (!isSafeSessionId(id)) return
@@ -995,7 +942,6 @@ export default {
       purgeSession: purge,
       restoreMany,
       purgeMany,
-      archivedFiles,
       retainedFiles: listRetained,
       restoreRetainedFile: restoreRetained,
       removeRetainedProvenance: removeRetainedSource,
@@ -1010,7 +956,6 @@ export default {
       // Host-side lifecycle callers may request the same safe reconciliation
       // as the periodic timer. It is intentionally not an HTTP action.
       syncArchivedCaches: () => reconcileArchivedCaches(),
-      newProject,
       flush: () => store.flush(),
       getConfig: () => safeConfigView(config),
     })
@@ -1192,7 +1137,7 @@ export default {
                 result = await backupRestore(value.id, value.targetDir)
                 break
               }
-              case 'saveConfig': result = saveConfigFile(apiObject(body, ['backup', 'capture', 'purge', 'remind', 'retention', 'updateCheck', 'categories'])); break
+              case 'saveConfig': result = saveConfigFile(apiObject(body, ['backup', 'remind', 'retention', 'updateCheck'])); break
             }
             return send(res, 200, { ok: true, result: Array.isArray(result) ? result : safeMutationResult(action, result) })
           } catch (error) {
@@ -1213,67 +1158,7 @@ export default {
       ctx.logger?.warn('[conversation-archive] HTTP API 注册失败:', e?.message)
     }
 
-    // ── 5.6) 清理/整理 + 配置保存（HTTP API 共用）──
-    const runCleanup = async () => {
-      if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }
-      const archiveRoot = path.join(harnessRoot, config.archiveDirName || DEFAULTS.archiveDirName)
-      try { assertPhysicalPathInside(archiveRoot, [harnessRoot], fsApi) }
-      catch (e) { return { ok: false, reason: e.message || 'invalid-archive-root' } }
-      const liveIds = new Set(ctx.sessions.list().map((s) => String(s.id)))
-      let persistedIds = new Set()
-      try {
-        if (sessionPersistence?.listSnapshots) {
-          const snaps = await sessionPersistence.listSnapshots()
-          persistedIds = new Set(snaps.map((s) => String(s.header.id)))
-        }
-      } catch { /* 忽略 */ }
-      const map = store.getMap()
-      const removed = orphanGC(map, { liveIds, persistedIds, fsApi, log })
-      if (removed.length > 0) store.flush()
-      const cleanedDirs = []
-      const pruneEmpty = (dir) => {
-        if (!fsApi.existsSync(dir)) return
-        let entries = []
-        try { entries = fsApi.readdirSync(dir) } catch { return }
-        for (const name of entries) {
-          const p = path.join(dir, name)
-          let st
-          try { st = fsApi.lstatSync(p) } catch { continue }
-          if (st.isSymbolicLink?.()) continue
-          if (st.isDirectory()) pruneEmpty(p)
-        }
-        try { if (fsApi.existsSync(dir) && fsApi.readdirSync(dir).length === 0 && dir !== archiveRoot) { fsApi.rmdirSync(dir); cleanedDirs.push(dir) } } catch { /* 忽略 */ }
-      }
-      if (fsApi.existsSync(archiveRoot)) pruneEmpty(archiveRoot)
-      log(`[清理] 孤儿映射 ${removed.length} 条，空目录 ${cleanedDirs.length} 个`)
-      return { removed, cleanedDirs }
-    }
-    // 缓存清理候选（供 AI 审核后删除；标注路径/大小/原因）
-    const cacheScan = async () => {
-      const liveIds = new Set(ctx.sessions.list().map((s) => String(s.id)))
-      let persistedIds = new Set()
-      try {
-        if (sessionPersistence?.listSnapshots) {
-          const snaps = await sessionPersistence.listSnapshots()
-          persistedIds = new Set(snaps.map((s) => String(s.header.id)))
-        }
-      } catch { /* 忽略 */ }
-      return scanCacheCandidates({
-        fsApi, harnessRoot, config,
-        dshHome: resolveDshHome(),
-        liveIds, persistedIds,
-        mapping: store.getMap(),
-        log,
-      })
-    }
-    const cacheDeleteItem = (targetPath) => {
-      if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }
-      if (!targetPath) return { ok: false, reason: 'no-path' }
-      let target
-      try { target = validateCacheDeleteTarget(targetPath, store.getMap(), { harnessRoot, config, fsApi }) }
-      catch (e) { return { ok: false, reason: e.message || 'unregistered-cache-path' } }
-      return cacheDelete(target, { fsApi, recycle: (p) => recyclePath(p, undefined, fsApi), log })
-    }
+    // ── 5.6) 配置保存（HTTP API 共用）──
     // Persisted due time is authoritative. The short timer only checks it and
     // therefore survives restart without inventing a second schedule.
     let backupTimer = null
@@ -1299,7 +1184,7 @@ export default {
     }
     const saveConfigFile = (body) => {
       if (pluginDisposed) return { ok: false, reason: 'plugin-disposed' }
-      const whole = apiObject(body, ['backup', 'capture', 'purge', 'remind', 'retention', 'updateCheck', 'categories'])
+      const whole = apiObject(body, ['backup', 'remind', 'retention', 'updateCheck'])
       const next = {}
       const integer = (value, field, min, max) => {
         if (!Number.isInteger(value) || value < min || value > max) throw apiError(400, 'invalid-request', `${field} is invalid`)
@@ -1317,16 +1202,6 @@ export default {
         if (value.autoIntervalDays !== undefined) item.autoIntervalDays = integer(value.autoIntervalDays, 'backup.autoIntervalDays', 0, 365)
         if (value.keepCount !== undefined) item.keepCount = integer(value.keepCount, 'backup.keepCount', 1, 100)
         next.backup = item
-      }
-      if (whole.capture !== undefined) {
-        const value = apiObject(whole.capture, ['enabled'], 'capture')
-        if (typeof value.enabled !== 'boolean') throw apiError(400, 'invalid-request', 'capture.enabled is invalid')
-        next.capture = { enabled: value.enabled }
-      }
-      if (whole.purge !== undefined) {
-        const value = apiObject(whole.purge, ['deleteDshSession'], 'purge')
-        if (typeof value.deleteDshSession !== 'boolean') throw apiError(400, 'invalid-request', 'purge.deleteDshSession is invalid')
-        next.purge = { deleteDshSession: value.deleteDshSession }
       }
       if (whole.remind !== undefined) {
         const value = apiObject(whole.remind, ['intervalDays'], 'remind')
@@ -1346,12 +1221,6 @@ export default {
         const value = apiObject(whole.updateCheck, ['enabled'], 'updateCheck')
         if (typeof value.enabled !== 'boolean') throw apiError(400, 'invalid-request', 'updateCheck.enabled is invalid')
         next.updateCheck = { enabled: value.enabled }
-      }
-      if (whole.categories !== undefined) {
-        const value = apiObject(whole.categories, Object.keys(whole.categories), 'categories')
-        const categories = normalizeCategories(value)
-        if (Object.keys(categories).length !== Object.keys(value).length || Object.entries(value).some(([extension, directory]) => !/^\.[A-Za-z0-9]{1,16}$/.test(extension) || categories[extension.toLowerCase()] !== directory)) throw apiError(400, 'invalid-request', 'categories are invalid')
-        next.categories = categories
       }
       if (Object.keys(next).length === 0) throw apiError(400, 'invalid-request', 'no fields to save')
       if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }

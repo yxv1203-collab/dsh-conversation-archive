@@ -1,4 +1,7 @@
+dist/
+node_modules/
 .worktrees/
 .superpowers/
-node_modules/
+*.log
 *.tmp
+.DS_Store

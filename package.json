@@ -1,0 +1,60 @@
+{
+  "name": "dsh-conversation-archive",
+  "version": "1.2.0",
+  "description": "Native archive, retention, and backup management for DeepSeek Harness.",
+  "type": "module",
+  "main": "./host/lib/index.js",
+  "exports": {
+    ".": "./host/lib/index.js",
+    "./client": "./client/lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host/lib",
+    "client/lib/client.js",
+    "cordis.patch.yml",
+    "release-manifest.json",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "check": "node --check host/lib/index.js && node --check host/lib/core.js && node --check host/lib/dsh-adapter.js && node --check host/lib/update-check.js && node --check client/lib/client.js",
+    "test:unit": "node host/test/portability-guard.mjs && node host/test/run-tests.mjs && node host/test/dsh-adapter.mjs && node host/test/retention.mjs && node host/test/retained-library.mjs && node host/test/backup.mjs && node host/test/update-check.mjs && node host/test/release-contract.mjs && node client/test/client-contract.mjs",
+    "test:integration": "node host/test/integration-loader.mjs",
+    "test": "npm run check && npm run test:unit && npm run test:integration"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "plugin",
+    "conversation-archive",
+    "backup"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yxv1203-collab/dsh-conversation-archive.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yxv1203-collab/dsh-conversation-archive/issues"
+  },
+  "homepage": "https://github.com/yxv1203-collab/dsh-conversation-archive#readme",
+  "author": "YangXv <yxv1203@gmail.com>",
+  "license": "MIT"
+}
