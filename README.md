@@ -141,6 +141,10 @@ node .\scripts\verify-release.mjs
 
 发布验收标准见 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。
 
+## 反馈与交流
+
+如果你在使用过程中发现问题，或对插件的功能、交互体验和兼容性有改进建议，欢迎通过 [GitHub Issues](https://github.com/yxv1203-collab/dsh-conversation-archive/issues) 提交反馈，也可以发送邮件至 [yxv1203@gmail.com](mailto:yxv1203@gmail.com)。欢迎围绕实际使用场景与后续优化方向进行交流。
+
 ## 开源协议
 
 本项目采用 [MIT License](LICENSE)，允许个人和企业免费使用、修改、分发及商用，但须保留原版权与许可声明。软件按原样提供，不附带任何担保。
