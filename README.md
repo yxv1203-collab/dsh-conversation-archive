@@ -10,6 +10,22 @@ Native archive control, protected file retention, and verified local backups for
 
 DSH Workspace Manager completes the archive lifecycle without replacing DeepSeek Harness state or reorganizing its workspace. It adds a native settings page for archived chats and projects, protects valuable outputs before cleanup, and provides auditable local backups.
 
+## Interface
+
+The workspace manager is embedded directly in the DSH settings system and follows its native visual language.
+
+![Archived conversations and retained files in DSH Workspace Manager](docs/images/workspace-manager-overview.png)
+
+*Archive search and filtering, batch controls, and the shared retained-files library.*
+
+![Local backup and plugin settings in DSH Workspace Manager](docs/images/backup-and-settings.png)
+
+*Local or network backup targets, scheduling, retention policy, update checks, and diagnostics.*
+
+### Archive metadata status
+
+**Metadata not registered** means that a native archived item has no plugin-managed file mapping, commonly because it predates the plugin or exists only in DSH state. It is informational, not an error. Native restore and deletion remain available; the plugin simply has no additional registered file scope to retain or clean for that item.
+
 ## Capabilities
 
 | Area | What it provides |
@@ -22,7 +38,6 @@ DSH Workspace Manager completes the archive lifecycle without replacing DeepSeek
 ## Native by design
 
 - DSH remains the only source of truth for archive state.
-- **Metadata not registered** means that a native archived item has no plugin-managed file mapping, commonly because it predates the plugin or exists only in DSH state. It is informational, not an error; native restore and deletion remain available, but there is no additionally registered file scope to retain or clean.
 - The plugin does not create projects, reorganize existing workspaces, or generate category folders for every conversation.
 - No prerequisite directory needs to be created before installation.
 - Cleanup is limited to data owned or explicitly registered by DSH; existing source projects are never deletion targets.
