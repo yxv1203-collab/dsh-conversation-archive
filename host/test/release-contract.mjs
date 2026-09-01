@@ -20,6 +20,8 @@ const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 
 const hostPackage = JSON.parse(fs.readFileSync(path.join(root, 'host', 'package.json'), 'utf8'))
 const clientPackage = JSON.parse(fs.readFileSync(path.join(root, 'client', 'package.json'), 'utf8'))
 const clientBundle = fs.readFileSync(path.join(root, 'client', 'lib', 'client.js'), 'utf8')
+const readmeEnglish = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+const readmeChinese = fs.readFileSync(path.join(root, 'README.zh-CN.md'), 'utf8')
 const registration = clientBundle.match(/__ModuleLoader__\.load\(\{\s*[\s\S]*?\bid:\s*['"]([^'"]+)['"]/)
 assert.equal(hostPackage.version, manifest.version)
 assert.equal(clientPackage.version, manifest.version)
@@ -35,6 +37,8 @@ assert.equal(hostPackage.name, manifest.name, 'installed wrapper package name ma
 assert.equal(clientPackage.name, manifest.name, 'client package name matches installed wrapper package name')
 assert.ok(registration, 'client bundle registers a ModuleLoader id')
 assert.equal(registration[1], manifest.name, 'client ModuleLoader id matches installed wrapper package name')
+assert.match(readmeEnglish, /Metadata not registered[\s\S]*not an error/i, 'English README explains the native-only metadata indicator')
+assert.match(readmeChinese, /元数据未登记[\s\S]*不是(?:故障|错误)/, 'Chinese README explains the native-only metadata indicator')
 for (const required of ['LICENSE', 'package.json', 'cordis.patch.yml', 'host/lib/index.js', 'host/lib/core.js', 'host/lib/dsh-adapter.js', 'host/lib/update-check.js', 'client/lib/client.js', 'README.md', 'README.zh-CN.md']) {
   assert.ok(manifest.files[required], `manifest hashes ${required}`)
 }

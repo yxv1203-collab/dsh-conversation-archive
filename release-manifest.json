@@ -12,7 +12,7 @@
     "pageUrl": "https://github.com/yxv1203-collab/dsh-conversation-archive/releases"
   },
   "files": {
-    "client/lib/client.js": "f310d3e405e3823f17d8d40ad7dc84ff16754bfe8cea72dde4122b1d83182194",
+    "client/lib/client.js": "2984b41c61044a5e87ee54e5be0e12cf679274cb095afe8964862c76eb629463",
     "cordis.patch.yml": "b33b95b4d3c21487f9363c9673ba10687a4affa03cdd4f3219a235490eeb9310",
     "host/lib/core.js": "ab83d3203390cb039f106e40a99412d2796b1393f3a245755d402f5fc2009b8f",
     "host/lib/dsh-adapter.js": "87a02fc4555b4bf7cf42588d458124c0e8fcf4a183ecedf611ab7fd86870b015",
@@ -20,7 +20,7 @@
     "host/lib/update-check.js": "f3cf99c0ee7f1278bf4c41bf4a09a508d6f11791e6c8d13fa51b4ad39dc4bd32",
     "LICENSE": "014cebc5f93a967fa8648f455e1aafa6fb9110e1d476f7ba652a3cd93b32c8fe",
     "package.json": "049b983b187fca8c00fb73a628d6b6378b6a8b5021c0130936d361349f11ad8d",
-    "README.md": "c738833fa3a6222d4d7ad52f44e892e1a6dab1d93d6d8d483e3a579654ae39d1",
-    "README.zh-CN.md": "804671557e92ba7be24ac774658155378174748f32c0c5f7cae46e392e247237"
+    "README.md": "d4296b5b263316a687993a18bcd51e7f1a59f0a46b4d2c20b49ea98bbe04283a",
+    "README.zh-CN.md": "594bd1dfcffb0565efe635751b60297294c5bbd28279502b02e8ae046cf3ee95"
   }
 }

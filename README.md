@@ -22,6 +22,7 @@ DSH Workspace Manager completes the archive lifecycle without replacing DeepSeek
 ## Native by design
 
 - DSH remains the only source of truth for archive state.
+- **Metadata not registered** means that a native archived item has no plugin-managed file mapping, commonly because it predates the plugin or exists only in DSH state. It is informational, not an error; native restore and deletion remain available, but there is no additionally registered file scope to retain or clean.
 - The plugin does not create projects, reorganize existing workspaces, or generate category folders for every conversation.
 - No prerequisite directory needs to be created before installation.
 - Cleanup is limited to data owned or explicitly registered by DSH; existing source projects are never deletion targets.

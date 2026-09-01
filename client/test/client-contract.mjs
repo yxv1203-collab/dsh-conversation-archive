@@ -54,7 +54,10 @@ for (const setting of ['重要文件 AI 保留', 'AI 审核候选上限', '单�
 }
 assert.doesNotMatch(source, /工作区根目录|请先.*文件夹|预先.*目录/, 'does not expose obsolete folder prerequisites or absolute workspace paths')
 assert.match(source, /\.dwm-fields\{[^}]*display:grid/, 'uses a responsive grid for aligned settings fields')
+assert.match(source, /\.dwm-path-row\{[^}]*display:grid[^}]*grid-template-columns:minmax\(0,1fr\) auto/, 'keeps the backup directory picker beside its input')
+assert.match(source, /className:\s*['"]dwm-path-row['"]/, 'applies the dedicated backup directory row')
 assert.match(source, /dwm-row-actions/, 'groups row actions so long retained-file metadata cannot displace controls')
+assert.match(source, /元数据未登记/, 'keeps the native-only archive mapping indicator')
 assert.doesNotMatch(source, /\[restoreTarget,\s*setRestoreTarget\]|恢复目录（空文件夹）/, 'asks for a restore destination only when the user starts restoring a backup')
 assert.match(source, /backupRestore[\s\S]{0,900}pickDirectory|pickDirectory[\s\S]{0,900}backupRestore/, 'uses the native folder picker in the backup restore flow')
 assert.match(source, /settings\?\.backup.*autoIntervalDays|settings\.backup\.autoIntervalDays/, 'hydrates backup controls from safe status settings')
