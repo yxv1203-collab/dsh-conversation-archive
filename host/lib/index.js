@@ -287,8 +287,9 @@ export default {
       updateSnapshot = await checkForUpdate({ enabled: config.updateCheck?.enabled !== false, manifest: RELEASE_MANIFEST, fetchImpl: updateFetch, platform: process.platform, dshVersion: dsh.compatibility().dshVersion })
       return updateSnapshot
     }
-    const clearNativeArchivedId = async (id) => dsh.listArchivedIds().includes(id)
-      ? dsh.forgetArchivedMarker(id) : { ok: true, alreadyAbsent: true }
+    const finalizeNativeDeletion = async (id) => dsh.compatibility().destructiveAvailable
+      ? dsh.removeArchivedSession(id)
+      : dsh.finalizeDeletedSession(id)
     const deletionQueue = () => {
       const raw = status.read().purgeQueue
       if (!Array.isArray(raw)) return []
@@ -313,7 +314,7 @@ export default {
           return
         }
       }
-      const native = await clearNativeArchivedId(pending.sessionId)
+      const native = await finalizeNativeDeletion(pending.sessionId)
       if (!native.ok) {
         log(`[purge 恢复] 原生归档状态尚未收敛: ${native.reason}`)
         return
@@ -617,11 +618,19 @@ export default {
         }
         return compact({ ok: false, recycled: res.recycled, protectedFiles: res.protectedFiles, reason: res.reason, partialPhase: res.partialPhase })
       }
-      // The cache/session recycle completed. Only now may the native archive
-      // id be cleared; a recycle failure above deliberately leaves it intact.
+      // The cache/session recycle completed. DSH 0.1.1 has no destructive
+      // archive API, so keep the archive marker hiding the live in-memory row
+      // until the next start can detach its workspace membership safely.
       try { status.write({ purgePending: { ...purgeIntent, phase: 'dsh-recycled-native-pending', recycledAt: Date.now() } }) }
       catch { return compact({ ok: false, reason: 'state-write-failed', recycled: res.recycled, protectedFiles: res.protectedFiles }) }
-      const native = await clearNativeArchivedId(id)
+      if (!nativeCompatibility.destructiveAvailable) {
+        const item = { sessionId: id, queuedAt: Date.now(), operationId, retentionComplete: true, dataRecycled: true }
+        try { saveDeletionQueue([...deletionQueue().filter((entry) => entry.sessionId !== id), item]) }
+        catch { return compact({ ok: false, reason: 'state-write-failed', recycled: res.recycled, protectedFiles: res.protectedFiles, partialPhase: 'dsh-recycled-native-pending' }) }
+        audit({ operationId, type: 'delete', sessionId: id, phase: 'queued-native-finalize', outcome: 'ok', details: { recycledCount: res.recycled?.length || 0, protectedCount: res.protectedFiles?.length || 0 } })
+        return compact({ ok: true, pendingRestart: true, recycled: res.recycled, protectedFiles: res.protectedFiles })
+      }
+      const native = await finalizeNativeDeletion(id)
       if (!native.ok) {
         audit({ operationId, type: 'delete', sessionId: id, phase: 'native-clear', outcome: 'partial', details: { reason: native.reason || 'native-delete-failed' } })
         return compact({ ok: false, reason: native.reason || 'native-delete-failed', recycled: res.recycled, protectedFiles: res.protectedFiles })
@@ -652,33 +661,9 @@ export default {
       if (!dsh.compatibility().stagedDeletionAvailable) return { ok: false, reason: 'native-archive-compatibility-unsupported' }
       const id = String(sessionId || '')
       if (!isSafeSessionId(id) || !dsh.listArchivedIds().includes(id)) return { ok: false, reason: 'not-natively-archived' }
-      // Future DSH versions may expose a real destructive operation. Use the
-      // existing immediate verified transaction only in that explicit case.
-      if (dsh.compatibility().destructiveAvailable) return finalizePurge(id)
       const existing = deletionQueue().find((item) => item.sessionId === id)
       if (existing) return { ok: true, pendingRestart: true, protectedFiles: [], alreadyQueued: true }
-      const operationId = crypto.randomUUID()
-      let prepared
-      try { prepared = await prepareArchivedCache(id) }
-      catch { return { ok: false, reason: 'cache-preflight-failed' } }
-      if (!prepared.ok) return compact({ ok: false, reason: prepared.reason })
-      const located = await locateDshSessionAny(id, prepared.entry || null, prepared.map || store.getMap())
-      if (!located.ok) return compact({ ok: false, reason: located.reason })
-      const reviewTarget = prepared.cacheScope === 'registered' ? prepared.target : nativeRetentionTarget(prepared.entry, located.dir)
-      const retention = await retainBeforePurge({
-        sessionId: id,
-        entry: prepared.entry || { kind: 'daily' },
-        target: reviewTarget,
-        sourceRoots: prepared.cacheScope === 'registered' || prepared.entry?.layoutVersion === 3 ? [harnessRoot] : [sessionPersistence.root],
-        candidateWindow: nativeRetentionWindow(prepared.entry),
-        operationId,
-      })
-      if (!retention.ok) return compact({ ok: false, reason: retention.reason })
-      const item = { sessionId: id, queuedAt: Date.now(), operationId, retentionComplete: true }
-      try { saveDeletionQueue([...deletionQueue(), item]) }
-      catch { return { ok: false, reason: 'state-write-failed' } }
-      audit({ operationId, type: 'delete', sessionId: id, phase: 'queued-for-restart', outcome: 'ok', details: { protectedCount: retention.retained?.length || 0 } })
-      return { ok: true, pendingRestart: true, protectedFiles: (retention.retained || []).map((entry) => entry.path || entry), recycled: [] }
+      return finalizePurge(id)
     }
     const restoreMany = (ids) => runMany(ids, restore)
     const purgeMany = (ids) => runMany(ids, purge)
@@ -1269,13 +1254,22 @@ export default {
           const retainedRecovery = recoverRetainedDeletion()
           if (!retainedRecovery.ok) log(`[保留文件恢复] ${retainedRecovery.reason}`)
           for (const pending of deletionQueue()) {
+            if (pending.dataRecycled === true) {
+              const native = await finalizeNativeDeletion(pending.sessionId)
+              if (!native.ok) { log(`[删除队列] ${pending.sessionId}: ${native.reason || 'native-finalize-failed'}`); continue }
+              const nextMap = { ...store.getMap() }
+              delete nextMap[pending.sessionId]
+              try {
+                store.commit(nextMap)
+                if (status.read().purgePending?.sessionId === pending.sessionId) status.write({ purgePending: null })
+                removeFromDeletionQueue(pending.sessionId)
+                audit({ operationId: pending.operationId || crypto.randomUUID(), type: 'delete', sessionId: pending.sessionId, phase: 'complete', outcome: 'ok', details: { nativeMode: native.mode || '' } })
+              } catch (error) { log(`[删除队列] ${pending.sessionId}: ${error?.message || 'state-write-failed'}`) }
+              continue
+            }
             if (!dsh.listArchivedIds().includes(pending.sessionId)) {
               removeFromDeletionQueue(pending.sessionId)
               try { audit({ operationId: pending.operationId || crypto.randomUUID(), type: 'delete', sessionId: pending.sessionId, phase: 'queue-cancelled-native-restore', outcome: 'skipped' }) } catch { /* queue cancellation is already durable */ }
-              continue
-            }
-            if (liveIds.has(pending.sessionId)) {
-              log(`[删除队列] ${pending.sessionId} 仍为活动会话，保留到下次启动`)
               continue
             }
             const finalized = await finalizePurge(pending.sessionId, { retentionAlreadyDone: pending.retentionComplete === true })

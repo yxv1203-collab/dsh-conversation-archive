@@ -73,6 +73,8 @@ assert.match(source, /retainedSource[\s\S]*provenanceId/, 'lets users choose ret
 assert.match(source, /if\s*\(backupTarget\.trim\(\)\)[\s\S]*targetDir:\s*''/, 'does not clear a hidden backup path on blur and offers explicit clearing')
 assert.match(source, /mode === ['"]periodic['"][\s\S]*backupDays \|\| 1[\s\S]*autoIntervalDays:\s*days/, 'persists a valid default interval when periodic mode is selected')
 assert.match(source, /pendingDeletionCount/, 'surfaces queued deletion state')
+assert.doesNotMatch(source, /恢复[^。；]*自动取消/, 'confirmed deletion is never described as a reversible unarchive action')
+assert.match(source, /移除工作区引用/, 'explains the restart-only native index finalization')
 assert.match(source, /projectLabel.*项目|项目.*projectLabel/, 'uses safe project labels in archived-session disclosure')
 assert.doesNotMatch(source, /单个对话缓存|单个项目缓存|专属缓存移入/, 'does not describe native DSH data as plugin-created caches')
 assert.match(source, /event\.key !== 'Tab'[\s\S]{0,240}preventDefault/, 'traps Tab focus inside confirmation dialogs')

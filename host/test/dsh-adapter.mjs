@@ -56,7 +56,8 @@ await test('restore capability is never advertised or invoked as native deletion
   assert.equal(adapter.compatibility().destructiveAvailable, false)
   assert.deepEqual(await adapter.removeArchivedSession('one'), { ok: false, reason: 'native-delete-unsupported' })
   assert.deepEqual(adapter.listArchivedIds(), ['one'], '删除能力探测不得触发取消归档')
-  assert.deepEqual(await adapter.forgetArchivedMarker('one'), { ok: true, mode: 'public' }, '数据已回收后才允许单独清除残留归档标记')
+  assert.deepEqual(await adapter.finalizeDeletedSession('one'), { ok: false, reason: 'native-delete-finalize-unsupported' }, '缺少工作区解绑能力时不得把清除标记伪装成删除')
+  assert.deepEqual(adapter.listArchivedIds(), ['one'])
 })
 
 await test('native deletion is available only through an explicit destructive API', async () => {
@@ -64,6 +65,20 @@ await test('native deletion is available only through an explicit destructive AP
   const adapter = createDshAdapter(context({ workspaceRegistry: native, sessionPersistence: persistence() }))
   assert.equal(adapter.compatibility().destructiveAvailable, true)
   assert.deepEqual(await adapter.removeArchivedSession('one'), { ok: true, mode: 'public' })
+  assert.deepEqual(adapter.listArchivedIds(), [])
+})
+
+await test('fallback deleted-session finalization detaches workspace membership before clearing archive state', async () => {
+  let sessionIds = ['keep', 'one', 'later']
+  const workspace = {
+    get sessionIds() { return sessionIds },
+    detachSession: async (id) => { sessionIds = sessionIds.filter((item) => item !== id) },
+  }
+  const native = registry(['one'], { list: () => [workspace] })
+  const adapter = createDshAdapter(context({ workspaceRegistry: native, sessionPersistence: persistence() }))
+
+  assert.deepEqual(await adapter.finalizeDeletedSession('one'), { ok: true, mode: 'fallback' })
+  assert.deepEqual(sessionIds, ['keep', 'later'])
   assert.deepEqual(adapter.listArchivedIds(), [])
 })
 

@@ -504,7 +504,7 @@ console.log('✓ API protected / locate / cacheScan / status（备份+提醒字�
 // ── 场景8：不可信状态与 locator 绝不能授予文件系统权限 ──
 const makeIsolatedContext = async (root, isolatedState, isolatedConfig, locate, patch = {}) => {
   const isolated = new Context()
-  const { fsApi: runtimeFs, recycle: runtimeRecycle, dshRecycle: runtimeDshRecycle, sessionPersistence: persistencePatch = {}, archivedIds: initialArchivedIds = [], nativeDelete = true, ...pluginPatch } = patch
+  const { fsApi: runtimeFs, recycle: runtimeRecycle, dshRecycle: runtimeDshRecycle, sessionPersistence: persistencePatch = {}, archivedIds: initialArchivedIds = [], workspaceSessionIds: initialWorkspaceSessionIds = initialArchivedIds, nativeDelete = true, ...pluginPatch } = patch
   const routes = []
   isolated.provide('webServer', { register: (route) => { routes.push(route); return () => {} } })
   isolated.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) })
@@ -514,12 +514,19 @@ const makeIsolatedContext = async (root, isolatedState, isolatedConfig, locate, 
   isolated.provide('sessions', { list: () => [], get: () => undefined, create: () => null })
   isolated.provide('sessionPersistence', { root: path.join(root, 'dsh-sessions'), compression: 'zstd', locate, listSnapshots: async () => [], ...persistencePatch })
   let isolatedWorkspaceState = { archivedSessionIds: [...initialArchivedIds] }
+  let isolatedWorkspaceSessionIds = [...initialWorkspaceSessionIds]
   let isolatedWorkspaceTail = Promise.resolve()
+  const workspace = {
+    get sessionIds() { return [...isolatedWorkspaceSessionIds] },
+    detachSession: async (id) => { isolatedWorkspaceSessionIds = isolatedWorkspaceSessionIds.filter((item) => item !== id) },
+  }
   const workspaceRegistry = {
     get archivedSessionIds() { return isolatedWorkspaceState.archivedSessionIds },
     archiveSession: async (id) => {
       if (!isolatedWorkspaceState.archivedSessionIds.includes(id)) isolatedWorkspaceState = { ...isolatedWorkspaceState, archivedSessionIds: [...isolatedWorkspaceState.archivedSessionIds, id] }
+      if (!isolatedWorkspaceSessionIds.includes(id)) isolatedWorkspaceSessionIds.push(id)
     },
+    list: () => [workspace],
     requireState: () => isolatedWorkspaceState,
     setState: async (next) => { isolatedWorkspaceState = next },
     enqueueOperation: (operation) => {
@@ -538,7 +545,7 @@ const makeIsolatedContext = async (root, isolatedState, isolatedConfig, locate, 
   await isolated.plugin(Loader, { baseUrl: new URL('../', resolveDshPackage('@deepseek-ai/cordis-plugin-loader')).href })
   await isolated.loader.create({ id: `conversation-archive-safe-${path.basename(root)}`, name: PLUGIN_URL, config: { harnessRoot: root, statePath: isolatedState, configPath: isolatedConfig, updateCheck: { enabled: false }, ...pluginPatch } })
   await isolated.loader.await()
-  return { context: isolated, workspaceRegistry, service: isolated.get('conversationArchive'), route: routes.find((item) => item.path === '/conversation-archive-api') }
+  return { context: isolated, workspaceRegistry, workspace, service: isolated.get('conversationArchive'), route: routes.find((item) => item.path === '/conversation-archive-api') }
 }
 
 // DSH 0.1.1-rc.2 exposes restore but no destructive API. In that runtime a
@@ -567,7 +574,7 @@ await staged.workspaceRegistry.archiveSession(stagedId)
 await staged.service.syncArchivedCaches()
 const stagedResult = await staged.service.purgeSession(stagedId)
 const stagedStatus = JSON.parse(fs.readFileSync(path.join(stagedRoot, 'status.json'), 'utf8'))
-if (!stagedResult.ok || !stagedResult.pendingRestart || !fs.existsSync(stagedLog) || !staged.workspaceRegistry.archivedSessionIds.includes(stagedId) || staged.service.status().archived.some((item) => item.id === stagedId) || staged.service.status().pendingDeletionCount !== 1 || !stagedStatus.purgeQueue?.some((item) => item.sessionId === stagedId)) throw new Error(`无原生删除 API 时必须排队、隐藏且不取消归档: ${JSON.stringify({ stagedResult, stagedStatus })}`)
+if (!stagedResult.ok || !stagedResult.pendingRestart || fs.existsSync(stagedLog) || !staged.workspaceRegistry.archivedSessionIds.includes(stagedId) || !staged.workspace.sessionIds.includes(stagedId) || staged.service.status().archived.some((item) => item.id === stagedId) || staged.service.status().pendingDeletionCount !== 1 || !stagedStatus.purgeQueue?.some((item) => item.sessionId === stagedId && item.dataRecycled === true)) throw new Error(`无原生删除 API 时必须先回收数据、保留归档隐藏并排队收敛索引: ${JSON.stringify({ stagedResult, stagedStatus })}`)
 await staged.context.fiber.dispose()
 const stagedRestart = await makeIsolatedContext(stagedRoot, stagedState, stagedConfig, stagedLocate, {
   nativeDelete: false,
@@ -579,9 +586,9 @@ const stagedRestart = await makeIsolatedContext(stagedRoot, stagedState, stagedC
 const stagedDeadline = Date.now() + 3000
 while (Date.now() < stagedDeadline && (fs.existsSync(stagedLog) || stagedRestart.workspaceRegistry.archivedSessionIds.includes(stagedId))) await new Promise((resolve) => setTimeout(resolve, 25))
 const stagedRestartStatus = JSON.parse(fs.readFileSync(path.join(stagedRoot, 'status.json'), 'utf8'))
-if (fs.existsSync(stagedLog) || stagedRestart.workspaceRegistry.archivedSessionIds.includes(stagedId) || stagedRestartStatus.purgeQueue?.some((item) => item.sessionId === stagedId)) throw new Error(`重启后删除队列必须回收数据再清除归档标记: ${JSON.stringify(stagedRestartStatus)}`)
+if (fs.existsSync(stagedLog) || stagedRestart.workspaceRegistry.archivedSessionIds.includes(stagedId) || stagedRestart.workspace.sessionIds.includes(stagedId) || stagedRestartStatus.purgeQueue?.some((item) => item.sessionId === stagedId)) throw new Error(`重启后删除队列必须移除工作区引用再清除归档标记: ${JSON.stringify(stagedRestartStatus)}`)
 await stagedRestart.context.fiber.dispose()
-console.log('✓ DSH 无原生删除 API：删除排队隐藏，重启后安全收敛且不复活')
+console.log('✓ DSH 无原生删除 API：数据先回收并保持隐藏，重启后移除工作区引用且不复活')
 
 const cancelRoot = path.join(tmp, 'staged-delete-cancel')
 const cancelState = path.join(cancelRoot, 'state.json')
@@ -601,12 +608,12 @@ await cancel.service.syncArchivedCaches()
 if (!(await cancel.service.purgeSession(cancelId)).pendingRestart) throw new Error('取消场景未进入删除队列')
 await cancel.workspaceRegistry.enqueueOperation(async () => { const value = cancel.workspaceRegistry.requireState(); await cancel.workspaceRegistry.setState({ ...value, archivedSessionIds: [] }) })
 await cancel.context.fiber.dispose()
-const cancelRestart = await makeIsolatedContext(cancelRoot, cancelState, cancelConfig, cancelLocate, { nativeDelete: false, archivedIds: [], recycle: removeTree, dshRecycle: removeTree, sessionPersistence: { root: cancelLogs, compression: 'zstd', listSnapshots: async () => [{ header: cancelHeader }] } })
+const cancelRestart = await makeIsolatedContext(cancelRoot, cancelState, cancelConfig, cancelLocate, { nativeDelete: false, archivedIds: [], workspaceSessionIds: [cancelId], recycle: removeTree, dshRecycle: removeTree, sessionPersistence: { root: cancelLogs, compression: 'zstd', listSnapshots: async () => [] } })
 const cancelDeadline = Date.now() + 1000
 while (Date.now() < cancelDeadline && JSON.parse(fs.readFileSync(path.join(cancelRoot, 'status.json'), 'utf8')).purgeQueue?.length) await new Promise((resolve) => setTimeout(resolve, 25))
-if (!fs.existsSync(cancelLog) || JSON.parse(fs.readFileSync(path.join(cancelRoot, 'status.json'), 'utf8')).purgeQueue?.length || cancelRestart.service.status().writesDisabled) throw new Error('DSH 原生恢复必须取消旧删除意图、保留会话数据且保持插件可写')
+if (fs.existsSync(cancelLog) || cancelRestart.workspace.sessionIds.includes(cancelId) || JSON.parse(fs.readFileSync(path.join(cancelRoot, 'status.json'), 'utf8')).purgeQueue?.length || cancelRestart.service.status().writesDisabled) throw new Error('确认删除并回收数据后，即使归档标记被外部清除也必须移除工作区残留引用')
 await cancelRestart.context.fiber.dispose()
-console.log('✓ 删除排队后在 DSH 原生恢复：旧意图自动取消，不会在再次归档后误删')
+console.log('✓ 已回收删除意图不再被取消归档语义逆转')
 
 // A purge keeps its preflight map while retention/recycle work awaits. Force
 // the normal archive-cache synchronizer to archive a second native session in

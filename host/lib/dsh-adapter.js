@@ -148,9 +148,29 @@ export function createDshAdapter(ctx, log = () => {}) {
 
   const restoreSession = (id) => clearArchivedSession(id, 'restore')
   const removeArchivedSession = (id) => clearArchivedSession(id, 'delete')
-  // This is intentionally not a delete API. The host may call it only after
-  // the independently validated DSH session artifact has been recycled.
-  const forgetArchivedMarker = (id) => clearArchivedSession(id, 'restore')
+  // DSH 0.1.1 has no public conversation-delete API. Once the independently
+  // validated session data has been recycled, remove its durable workspace
+  // membership before clearing the archive marker. Clearing only the marker
+  // is an unarchive operation and would make the deleted row visible again.
+  const finalizeDeletedSession = async (id) => {
+    if (!isSafeSessionId(id)) return { ok: false, reason: 'invalid-session-id' }
+    const registry = registryFor(ctx)
+    if (typeof registry?.list !== 'function' || !fallbackAvailable(registry)) return { ok: false, reason: 'native-delete-finalize-unsupported' }
+    try {
+      const workspaces = registry.list()
+      if (!Array.isArray(workspaces) || workspaces.some((workspace) => typeof workspace?.detachSession !== 'function')) return { ok: false, reason: 'native-delete-finalize-unsupported' }
+      for (const workspace of workspaces) await workspace.detachSession(id)
+      if (listArchivedIds().includes(id)) {
+        const cleared = await clearArchivedSession(id, 'restore')
+        if (!cleared.ok) return cleared
+      }
+      if (registry.list().some((workspace) => Array.isArray(workspace?.sessionIds) && workspace.sessionIds.includes(id))) return { ok: false, reason: 'workspace-detach-not-verified' }
+      return { ok: true, mode: 'fallback' }
+    } catch (error) {
+      log(`DSH deleted-session finalization failed: ${error?.message || error}`)
+      return { ok: false, reason: 'native-delete-finalize-failed' }
+    }
+  }
 
   const locateSessionDir = (id, metadata = {}) => {
     if (!isSafeSessionId(id)) return { ok: false, reason: 'invalid-session-id' }
@@ -187,13 +207,14 @@ export function createDshAdapter(ctx, log = () => {}) {
     const publicDeleteApi = publicRestore(registry, 'delete')
     const fallback = fallbackAvailable(registry)
     const persistence = ctx?.get?.('sessionPersistence')
+    const workspaceDetachAvailable = typeof registry?.list === 'function' && registry.list().every((workspace) => typeof workspace?.detachSession === 'function')
     return {
       dshVersion: dshVersion(ctx),
       workspaceRegistry: !!registry,
       archiveListAvailable: Array.isArray(registry?.archivedSessionIds),
       restoreAvailable: !!publicApi || fallback,
       destructiveAvailable: !!publicDeleteApi,
-      stagedDeletionAvailable: (!!publicApi || fallback) && typeof persistence?.locate === 'function' && typeof persistence?.root === 'string',
+      stagedDeletionAvailable: (!!publicDeleteApi || (fallback && workspaceDetachAvailable)) && typeof persistence?.locate === 'function' && typeof persistence?.root === 'string',
       restoreMode: publicApi ? 'public' : fallback ? 'fallback' : 'unsupported',
       sessionLocatorAvailable: typeof persistence?.locate === 'function' && typeof persistence?.root === 'string',
     }
@@ -207,5 +228,5 @@ export function createDshAdapter(ctx, log = () => {}) {
       : { id, metadata: metadata || {} }
   })
 
-  return { listArchivedIds, listArchivedEntries, sessionMetadata, restoreSession, removeArchivedSession, forgetArchivedMarker, locateSessionDir, compatibility }
+  return { listArchivedIds, listArchivedEntries, sessionMetadata, restoreSession, removeArchivedSession, finalizeDeletedSession, locateSessionDir, compatibility }
 }
