@@ -1,0 +1,32 @@
+{
+    "name":  "dsh-conversation-archive",
+    "version":  "1.0.0",
+    "platform":  "win32",
+    "dsh":  {
+                "minVersion":  "0.1.1-rc.2",
+                "maxTestedVersion":  "0.1.1-rc.2"
+            },
+    "release":  {
+                    "repository":  "yxv1203-collab/dsh-conversation-archive",
+                    "apiUrl":  "https://api.github.com/repos/yxv1203-collab/dsh-conversation-archive/releases/latest",
+                    "pageUrl":  "https://github.com/yxv1203-collab/dsh-conversation-archive/releases"
+                },
+    "files":  {
+                  "client/lib/client.js":  "b2f48acece4fa5fd8dc44ac593fc4bec6f45c28a19b5e528739161a7c8a86c59",
+                  "client/lib/index.js":  "4cb1e18f94d9745d5b9e7098a68d15fe9507c6b848bc6514ed71f2fe7eaedb1f",
+                  "client/package.json":  "cb2ad0dd206b900b869241a4bfa24ba59390b52db88296bd12e171fcf2fdacfb",
+                  "docs/ACCEPTANCE.md":  "43dff38ce32319741e7b9162106d1004b41fea3b00f429273651c238d3b52e3c",
+                  "host/lib/core.js":  "bf565595b30b478ac9396a39e5e227e9d2d2f7fca2bda287ba839be44c236935",
+                  "host/lib/dsh-adapter.js":  "038fd94e237b793eb61bf9826b05e6911802a39767e618c9c776456ddebab9be",
+                  "host/lib/index.js":  "58c38259f328d3ce265d80161cbdfaf9ef0c4a9118112806fa0e2e9ab58627c1",
+                  "host/lib/update-check.js":  "f3cf99c0ee7f1278bf4c41bf4a09a508d6f11791e6c8d13fa51b4ad39dc4bd32",
+                  "host/package.json":  "fe4c6045b2d74e864ecb9cfd8483757832dfbe646a9950df6784496203b6a8bd",
+                  "host/README.md":  "16a7dfcee643d7b685f9b63a92f73e4e832ecb9381d90cdc4b494cfea053a4ab",
+                  "LICENSE":  "014cebc5f93a967fa8648f455e1aafa6fb9110e1d476f7ba652a3cd93b32c8fe",
+                  "README.md":  "5156b1f50463ca63248732a1451c5e8eba65d7a65cdeb11e0908032b8f4f274f",
+                  "scripts/build-release.ps1":  "1ba9cfcc879667fb5f06e72b57aa25499ae66f177fac8f93a0b3067194bc5e70",
+                  "scripts/install.ps1":  "439b05af2cc1931bb9c319ee0f04f7964d68726bd072d77af8ab76add76e6acf",
+                  "scripts/uninstall.ps1":  "ca02e4c0be644e2bc739e3f4aa2513b3d526c50dd75c4fe9ce292b55833086e8",
+                  "scripts/verify-release.mjs":  "418ffe5ff1d93e6ed84fcb3eca4843a67c677e8e6086e08c9a0a3c3d5b18416e"
+              }
+}

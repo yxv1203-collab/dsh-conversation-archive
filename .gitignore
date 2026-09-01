@@ -1,0 +1,4 @@
+.worktrees/
+.superpowers/
+node_modules/
+*.tmp

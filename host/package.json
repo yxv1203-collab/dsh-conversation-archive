@@ -1,0 +1,21 @@
+{
+  "name": "dsh-conversation-archive",
+  "version": "1.0.0",
+  "description": "工作区管理",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./core": "./lib/core.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test:unit": "node test/portability-guard.mjs && node test/run-tests.mjs && node test/dsh-adapter.mjs && node test/retention.mjs && node test/retained-library.mjs && node test/backup.mjs && node test/update-check.mjs && node test/release-contract.mjs",
+    "test:integration": "node test/integration-loader.mjs",
+    "test": "npm run test:unit && npm run test:integration",
+    "check": "node --check lib/index.js && node --check lib/core.js && node --check lib/dsh-adapter.js && node --check lib/update-check.js"
+  }
+}
