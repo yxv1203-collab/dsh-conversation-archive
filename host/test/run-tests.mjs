@@ -9,9 +9,9 @@ import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import {
-  sanitizeName, dateStr, classifyWorkspace, uniqueTag, categoryOf, cacheLayoutFor,
+  sanitizeName, dateStr, classifyWorkspace, inferHarnessRoot, sessionEntryFromHeader, uniqueTag, categoryOf, cacheLayoutFor,
   loadMapping, saveMapping, loadConfig, normalizeCategories, toJsonSafe,
-  atomicWriteJson, loadVersionedJson, isPathInside, assertManagedPath, assertPhysicalPathInside, recycleScript, recyclePath,
+  atomicWriteJson, loadVersionedJson, isPathInside, assertManagedPath, assertPhysicalPathInside, assertSessionPhysicalPaths, recycleScript, recyclePath,
   inspectVersionedJson, appendOperation, inspectOperationsLog, validateSessionEntry, validateCacheDeleteTarget, resolveProtectedChild,
   findRetentionCandidates,
   archiveSessionFlow, restoreSessionFlow, purgeSessionFlow, pruneEmptyParents, runMany, orphanGC,
@@ -69,6 +69,55 @@ test('工作区根目录可直接用于日常对话，不要求用户预建文�
   assert.equal(r.kind, 'project'); assert.equal(r.root, path.join(H, '项目A'))
   assert.equal(classifyWorkspace(H, { harnessRoot: H }).kind, 'daily')
   assert.equal(classifyWorkspace(os.tmpdir(), { harnessRoot: H }).kind, 'outside')
+})
+
+test('从 DSH 工作区识别跨盘 Harness 根目录并补建历史会话映射', () => {
+  const configured = path.resolve('C:\\Users\\tester\\Documents\\DeepSeek Harness')
+  for (const drive of ['D:', 'E:']) {
+    const actual = path.resolve(`${drive}\\DSH Data\\DeepSeek Harness`)
+    const daily = path.join(actual, 'daily_conversation')
+    const detected = inferHarnessRoot(configured, [daily], { dailyDirName: 'daily_conversation' })
+    assert.equal(detected, actual)
+    const entry = sessionEntryFromHeader({ id: `history-${drive[0]}`, cwd: daily, createdAt: new Date(2026, 8, 3).getTime() }, { harnessRoot: detected })
+    assert.equal(entry?.cwd, daily)
+    assert.equal(entry?.kind, 'daily')
+    assert.equal(entry?.layoutVersion, 3)
+    assert.equal(validateSessionEntry(entry.id, entry, { harnessRoot: detected, mapping: { [entry.id]: entry } }).ok, true)
+  }
+})
+
+test('显式配置的 Harness 根目录不会被自动识别覆盖', () => {
+  const configured = path.resolve('F:\\Explicit Harness')
+  const detected = inferHarnessRoot(configured, [path.resolve('D:\\DeepSeek Harness\\daily_conversation')], { dailyDirName: 'daily_conversation', explicit: true })
+  assert.equal(detected, configured)
+})
+
+test('原生会话可位于任意磁盘，映射必须与 DSH 会话头一致', () => {
+  const harnessRoot = path.resolve('C:\\Harness Storage')
+  const header = { id: 'external-native-project', cwd: path.resolve('E:\\Projects\\独立项目'), createdAt: 1788393600000 }
+  const entry = sessionEntryFromHeader(header, { harnessRoot, allowNativeWorkspace: true })
+  assert.equal(entry?.kind, 'project')
+  assert.equal(entry?.root, header.cwd)
+  const config = { ...loadConfig(fs, {}, ''), nativeSessionHeaders: { [header.id]: header } }
+  assert.equal(validateSessionEntry(header.id, entry, { harnessRoot, config, mapping: { [header.id]: entry } }).ok, true)
+  assert.equal(validateSessionEntry(header.id, entry, { harnessRoot, mapping: { [header.id]: entry } }).ok, false)
+  const poisoned = { ...entry, cwd: path.resolve('E:\\Secrets'), root: path.resolve('E:\\Secrets') }
+  assert.equal(validateSessionEntry(header.id, poisoned, { harnessRoot, config, mapping: { [header.id]: poisoned } }).ok, false)
+})
+
+test('原生跨盘工作区映射不能通过 Junction 越界读取产出', () => {
+  if (process.platform !== 'win32') return
+  const parent = path.join(tmp, 'native-boundary')
+  const outside = path.join(tmp, 'native-outside')
+  const junction = path.join(parent, 'project')
+  fs.mkdirSync(parent); fs.mkdirSync(outside)
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `New-Item -ItemType Junction -Path '${junction}' -Target '${outside}' | Out-Null`], { stdio: 'ignore' })
+  const header = { id: 'native-junction', cwd: junction, createdAt: 1788393600000 }
+  const entry = sessionEntryFromHeader(header, { harnessRoot: H, allowNativeWorkspace: true })
+  const config = { ...loadConfig(fs, {}, ''), nativeSessionHeaders: { [header.id]: header } }
+  const valid = validateSessionEntry(header.id, entry, { harnessRoot: H, config, mapping: { [header.id]: entry } })
+  assert.equal(valid.ok, true)
+  assert.throws(() => assertSessionPhysicalPaths(header.id, entry, valid, { harnessRoot: H, config, fsApi: fs }), { message: 'path-reparse-escape' })
 })
 
 test('标签区分性 uniqueTag', () => {

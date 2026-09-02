@@ -72,6 +72,16 @@ try {
   assert.equal(restoreRetainedFile(sha256, { ...deps, targetDir: alternateParent }).reason, 'target-exists')
   console.log('✓ 恢复只按 ID 解析，原位置/备选目录均不覆盖')
 
+  const externalWorkspace = path.join(root, 'external-native-workspace')
+  fs.mkdirSync(externalWorkspace)
+  writeIndex([{ ...sources[0], originalPath: path.join(externalWorkspace, '跨盘成果.md') }])
+  assert.equal(restoreRetainedFile(sha256, deps).ok, false, 'a stored path alone cannot authorize an external restore')
+  assert.equal(restoreRetainedFile(sha256, { ...deps, workspaceRoots: [externalWorkspace] }).ok, true)
+  assert.equal(fs.readFileSync(path.join(externalWorkspace, '跨盘成果.md'), 'utf8'), content)
+  fs.rmSync(path.join(externalWorkspace, '跨盘成果.md'))
+  writeIndex(sources)
+  console.log('✓ DSH 已登记的跨盘工作区支持原位置恢复，未授权路径仍拒绝')
+
   fs.writeFileSync(sourceFile, 'tampered')
   assert.equal(restoreRetainedFile(sha256, { ...deps, targetDir: path.join(root, 'tampered-target') }).reason, 'retention-hash-mismatch')
   fs.mkdirSync(path.join(root, 'tampered-target'))

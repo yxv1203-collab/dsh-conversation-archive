@@ -248,6 +248,24 @@ await svc.purgeSession('p1')
 if (map()['p1']) throw new Error('项目彻底删除失败')
 console.log('✓ 项目 归档/取消归档/彻底删除')
 
+// A native project outside the shared Harness root has the same retention and
+// deletion contract: preserve outputs, recycle only its DSH log, keep sources.
+const externalProject = fs.mkdtempSync(path.join(os.tmpdir(), 'dca-external-project-'))
+const externalId = 'external-native-project'
+const externalOutput = path.join(externalProject, '跨盘成果.md')
+fs.writeFileSync(externalOutput, 'important external project output')
+ctx.emit('session/created', { header: { id: externalId, cwd: externalProject, createdAt: t0 } })
+await nativeArchive(externalId)
+const externalLogDir = fakeSessionDir(externalId, externalProject)
+fs.mkdirSync(externalLogDir, { recursive: true })
+fs.writeFileSync(path.join(externalLogDir, 'session.jsonl.zstd'), 'native external log')
+const externalDelete = await svc.purgeSession(externalId)
+if (!externalDelete.ok || fs.existsSync(externalLogDir) || !fs.existsSync(externalOutput)) throw new Error('跨盘项目删除必须只回收 DSH 日志并保留源码')
+const externalRetained = JSON.parse(fs.readFileSync(path.join(tmp, 'retained.json'), 'utf8'))
+if (!Object.values(externalRetained.files).some((record) => record.sources.some((source) => source.sessionId === externalId) && fs.existsSync(record.path))) throw new Error('跨盘项目产出必须完成 AI 审核和哈希保留')
+fs.rmSync(externalProject, { recursive: true, force: true })
+console.log('✓ 跨盘原生项目：AI/哈希保留 → 仅回收 DSH 日志，原源码不动')
+
 // 为剩余原生会话写入 DSH 持久化夹，供备份使用。
 for (const id of ['p2']) {
   const entry = map()[id]

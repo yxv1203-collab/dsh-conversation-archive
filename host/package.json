@@ -13,7 +13,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "test:unit": "node test/portability-guard.mjs && node test/run-tests.mjs && node test/dsh-adapter.mjs && node test/retention.mjs && node test/retained-library.mjs && node test/backup.mjs && node test/update-check.mjs && node test/release-contract.mjs",
+    "test:unit": "node test/portability-guard.mjs && node test/run-tests.mjs && node test/backfill.mjs && node test/dsh-adapter.mjs && node test/retention.mjs && node test/retained-library.mjs && node test/backup.mjs && node test/update-check.mjs && node test/release-contract.mjs",
     "test:integration": "node test/integration-loader.mjs",
     "test": "npm run test:unit && npm run test:integration",
     "check": "node --check lib/index.js && node --check lib/core.js && node --check lib/dsh-adapter.js && node --check lib/update-check.js"

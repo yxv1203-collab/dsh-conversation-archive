@@ -279,6 +279,24 @@ export function validateSessionEntry(sessionId, entry, { harnessRoot, config = D
   if (mapping && mapping[id] !== entry) return { ok: false, reason: 'unregistered-entry' }
   if (!safeTag(entry.tag) || !['daily', 'project'].includes(entry.kind)) return { ok: false, reason: 'invalid-session-entry' }
   const root = path.resolve(harnessRoot || DEFAULTS.harnessRoot)
+  if (entry.layoutVersion === 3) {
+    const native = config.nativeSessionHeaders?.[id]
+    const nativeMatches = native && typeof native.cwd === 'string' && samePath(native.cwd, entry.cwd)
+      && Number(native.createdAt) === Number(entry.createdAt)
+    if (native && !nativeMatches) return { ok: false, reason: 'native-session-metadata-mismatch' }
+    const underHarness = typeof entry.cwd === 'string' && (samePath(root, entry.cwd) || isPathInside(root, entry.cwd))
+    if (!Number.isFinite(Number(entry.createdAt)) || typeof entry.cwd !== 'string' || !path.isAbsolute(entry.cwd) || (!underHarness && !nativeMatches)) return { ok: false, reason: 'invalid-session-entry' }
+    if (entry.kind === 'daily') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.date || '')) return { ok: false, reason: 'invalid-session-entry' }
+    } else {
+      const managedProject = typeof entry.root === 'string' && isPathInside(root, entry.root) && path.dirname(path.resolve(entry.root)) === root
+      const nativeProject = nativeMatches && typeof entry.root === 'string' && samePath(entry.root, entry.cwd)
+      if ((!managedProject && !nativeProject) || (!samePath(entry.root, entry.cwd) && !isPathInside(entry.root, entry.cwd))) return { ok: false, reason: 'invalid-session-entry' }
+    }
+    if (['cacheDir', 'recordFile', 'manifestFile', 'archivePath', 'cacheKey'].some((key) => entry[key] !== undefined)) return { ok: false, reason: 'invalid-session-entry' }
+    if (entry.status !== 'active') return { ok: false, reason: 'invalid-session-entry' }
+    return { ok: true, layout: null, archiveRoot: path.join(root, config.archiveDirName || DEFAULTS.archiveDirName) }
+  }
   if (entry.kind === 'daily') {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.date || '')) return { ok: false, reason: 'invalid-session-entry' }
   } else {
@@ -286,12 +304,6 @@ export function validateSessionEntry(sessionId, entry, { harnessRoot, config = D
     // v0.3.1 project caches shared <project>/.cache. They are deliberately
     // quarantined: their old mapping must never authorize deletion or moves.
     if (![2, 3].includes(entry.layoutVersion)) return { ok: false, reason: 'legacy-shared-project-cache' }
-  }
-  if (entry.layoutVersion === 3) {
-    if (!Number.isFinite(Number(entry.createdAt)) || typeof entry.cwd !== 'string' || (!samePath(root, entry.cwd) && !isPathInside(root, entry.cwd))) return { ok: false, reason: 'invalid-session-entry' }
-    if (['cacheDir', 'recordFile', 'manifestFile', 'archivePath', 'cacheKey'].some((key) => entry[key] !== undefined)) return { ok: false, reason: 'invalid-session-entry' }
-    if (entry.status !== 'active') return { ok: false, reason: 'invalid-session-entry' }
-    return { ok: true, layout: null, archiveRoot: path.join(root, config.archiveDirName || DEFAULTS.archiveDirName) }
   }
   if (entry.layoutVersion === 2 && entry.kind === 'daily' && !Number.isFinite(Number(entry.createdAt))) return { ok: false, reason: 'invalid-session-entry' }
   if (entry.layoutVersion === 2 && entry.cacheKey !== undefined && (!safeTag(entry.cacheKey) || !new RegExp(`^${sessionShortId(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:-\\d+)?$`).test(entry.cacheKey))) return { ok: false, reason: 'invalid-session-entry' }
@@ -338,7 +350,12 @@ export function validateCacheDeleteTarget(target, mapping, { harnessRoot, config
 /** Check configured roots and the session cache before any filesystem mutation. */
 export function assertSessionPhysicalPaths(_sessionId, entry, valid, { harnessRoot, config = DEFAULTS, fsApi }) {
   if (!fsApi) return
-  if (entry.layoutVersion === 3) return
+  if (entry.layoutVersion === 3) {
+    const workspace = entry.kind === 'project' ? entry.root : entry.cwd
+    assertPhysicalPathInside(workspace, [path.dirname(workspace)], fsApi)
+    if (!samePath(entry.cwd, workspace)) assertPhysicalPathInside(entry.cwd, [workspace], fsApi)
+    return
+  }
   const root = path.resolve(harnessRoot || DEFAULTS.harnessRoot)
   const dailyRoot = path.join(root, config.dailyDirName || DEFAULTS.dailyDirName)
   const archiveRoot = path.join(root, config.archiveDirName || DEFAULTS.archiveDirName)
@@ -527,9 +544,49 @@ export function classifyWorkspace(cwd, opts = {}) {
   return { kind: 'project', root: path.resolve(harnessRoot, rel) }
 }
 
+/** Resolve a relocated Harness root from DSH's canonical workspace records. */
+export function inferHarnessRoot(configuredRoot, workspacePaths = [], opts = {}) {
+  const configured = path.resolve(configuredRoot || DEFAULTS.harnessRoot)
+  if (opts.explicit) return configured
+  const dailyName = opts.dailyDirName || DEFAULTS.dailyDirName
+  const workspaces = workspacePaths
+    .filter((value) => typeof value === 'string' && path.isAbsolute(value))
+    .map((value) => path.resolve(value))
+  if (workspaces.some((value) => isPathInside(configured, value))) return configured
+  const candidates = new Set()
+  for (const workspace of workspaces) {
+    if (path.basename(workspace).toLowerCase() === dailyName.toLowerCase()) candidates.add(path.dirname(workspace))
+  }
+  return candidates.size === 1 ? [...candidates][0] : configured
+}
+
 export function placeholderTag(sessionId) {
   const short = String(sessionId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(-12)
   return `会话-${short || 'x'}`
+}
+
+/** Build the minimal v3 mapping recorded for a DSH-owned session header. */
+export function sessionEntryFromHeader(header, opts = {}) {
+  const id = String(header?.id || '')
+  if (!isSafeSessionId(id) || typeof header?.cwd !== 'string' || !path.isAbsolute(header.cwd)) return null
+  let cls = classifyWorkspace(header.cwd, opts)
+  if (cls.kind === 'outside') {
+    if (!opts.allowNativeWorkspace) return null
+    cls = path.basename(header.cwd).toLowerCase() === (opts.dailyDirName || DEFAULTS.dailyDirName).toLowerCase()
+      ? { kind: 'daily' } : { kind: 'project', root: path.resolve(header.cwd) }
+  }
+  const createdAt = Number.isSafeInteger(header.createdAt) && header.createdAt >= 0 ? header.createdAt : Date.now()
+  return {
+    id,
+    cwd: path.resolve(header.cwd),
+    createdAt,
+    kind: cls.kind,
+    root: cls.root || undefined,
+    date: cls.kind === 'daily' ? dateStr(new Date(createdAt)) : undefined,
+    tag: placeholderTag(id),
+    layoutVersion: 3,
+    status: 'active',
+  }
 }
 
 /** 区分性：候选名若已被 taken 占用（不含自身 oldTag），依次加 -2/-3 */
@@ -947,8 +1004,13 @@ export function restoreRetainedFile(recordId, { targetDir = '', provenanceId = '
     if (!deps.fsApi.existsSync(parent)) return { ok: false, reason: targetDir ? 'target-directory-not-found' : 'original-parent-missing' }
     const stat = deps.fsApi.lstatSync(parent)
     if (!stat.isDirectory() || stat.isSymbolicLink?.()) return { ok: false, reason: 'path-reparse-escape' }
-    if (!targetDir) assertPhysicalPathInside(parent, [deps.harnessRoot], deps.fsApi)
-    else assertPhysicalPathInside(parent, [path.dirname(parent)], deps.fsApi)
+    if (!targetDir) {
+      const roots = [deps.harnessRoot, ...(Array.isArray(deps.workspaceRoots) ? deps.workspaceRoots : [])]
+        .filter((root) => typeof root === 'string' && path.isAbsolute(root))
+      const root = roots.find((candidate) => samePath(parent, candidate) || isPathInside(candidate, parent))
+      if (!root) throw new Error('path-outside-managed-roots')
+      assertPhysicalPathInside(parent, [samePath(parent, root) ? path.dirname(root) : root], deps.fsApi)
+    } else assertPhysicalPathInside(parent, [path.dirname(parent)], deps.fsApi)
     const target = path.join(parent, name)
     assertPhysicalPathInside(target, [parent], deps.fsApi)
     copyVerifiedRetained(sourceFile, target, String(recordId).toLowerCase(), deps.fsApi)

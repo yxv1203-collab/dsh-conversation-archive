@@ -9,7 +9,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import {
-  DEFAULTS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, classifyWorkspace, sanitizeName, dateStr, placeholderTag,
+  DEFAULTS, atomicWriteJson, appendOperation, inspectOperationsLog, inspectVersionedJson, loadVersionedJson, loadConfig, toJsonSafe, isPathInside, assertPhysicalPathInside, assertSessionPhysicalPaths, isSafeSessionId, inferHarnessRoot, sessionEntryFromHeader, sanitizeName, placeholderTag,
   cacheLayoutFor,
   loadMapping, saveMapping, validateSessionEntry, archiveSessionFlow, restoreSessionFlow, purgeSessionFlow,
   runMany, createBackup, listBackups, restoreBackup, runOverdueBackup, backupScheduleView, resetBackupSchedule, orphanGC, recyclePath,
@@ -248,8 +248,23 @@ export default {
     let config = loadConfig(fsApi, cfg, preflightErrors.length ? '' : configPath)
     const configPreflight = preflightByStore.config
     if (configPreflight.error) config.persistenceError = configPreflight.error
-    const harnessRoot = path.resolve(config.harnessRoot)
+    const configuredHarnessRoot = path.resolve(config.harnessRoot)
+    const rootIsExplicit = Object.prototype.hasOwnProperty.call(cfg, 'harnessRoot')
+      || Boolean(process.env.DCA_HARNESS_ROOT || process.env.DSH_HARNESS_ROOT)
+      || (typeof configPreflight.value?.harnessRoot === 'string'
+        && path.resolve(configPreflight.value.harnessRoot).toLowerCase() !== path.resolve(DEFAULTS.harnessRoot).toLowerCase())
+    let workspacePaths = []
+    try { workspacePaths = (ctx.get('workspaceRegistry')?.list?.() || []).map((workspace) => workspace?.path).filter(Boolean) }
+    catch { /* an unavailable registry falls back to the configured root */ }
+    const hasRootBoundState = Object.keys(preflightByStore.mapping.value || {}).some((key) => key !== 'schemaVersion')
+      || Object.keys(preflightByStore.retained.value?.files || {}).length > 0
+    const savedAutoRoot = preflightByStore.status.value?.resolvedHarnessRoot
+    const hasSavedAutoRoot = !rootIsExplicit && typeof savedAutoRoot === 'string' && path.isAbsolute(savedAutoRoot)
+    let harnessRoot = inferHarnessRoot(hasSavedAutoRoot ? savedAutoRoot : configuredHarnessRoot, workspacePaths, { dailyDirName: config.dailyDirName, explicit: rootIsExplicit || hasSavedAutoRoot || hasRootBoundState })
+    const nativeSessionHeaders = Object.create(null)
+    config = { ...config, harnessRoot, nativeSessionHeaders }
     const log = (...args) => ctx.logger?.info('[conversation-archive]', ...args)
+    if (harnessRoot !== configuredHarnessRoot) log(`[工作区] 已从 DSH 注册表识别 Harness 根目录: ${harnessRoot}`)
     const persistenceErrors = [...preflightErrors]
     let writesDisabled = persistenceErrors.length > 0
     let pluginDisposed = false
@@ -269,6 +284,7 @@ export default {
     })
     if (config.persistenceError) disableWrites('config', config.persistenceError)
     if (writesDisabled) status.disable()
+    else status.write({ resolvedHarnessRoot: harnessRoot })
     const mappingPreflight = preflightByStore.mapping
     const initialMap = writesDisabled && mappingPreflight.value && typeof mappingPreflight.value === 'object'
       ? Object.fromEntries(Object.entries(mappingPreflight.value).filter(([key]) => key !== 'schemaVersion')) : null
@@ -281,6 +297,62 @@ export default {
     const sessionPersistence = ctx.get('sessionPersistence')
     // DSH owns archive truth. The local mapping only records plugin cache work.
     const dsh = createDshAdapter(ctx, log)
+    // Recovery can clear these durable intents before a stale persistence
+    // snapshot is read. Keep their identities for this boot so backfill cannot
+    // resurrect a mapping whose deletion is already being finalized.
+    const registrationBlockedIds = new Set([
+      statusValue.purgePending?.sessionId,
+      ...(Array.isArray(statusValue.purgeQueue) ? statusValue.purgeQueue.map((item) => item?.sessionId) : []),
+    ].filter((id) => typeof id === 'string' && isSafeSessionId(id)))
+    const registerSessionHeader = (header, source = 'session/created') => {
+      if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }
+      const entry = sessionEntryFromHeader(header, { harnessRoot, dailyDirName: config.dailyDirName, allowNativeWorkspace: true })
+      if (!entry) return { ok: false, reason: 'session-outside-harness' }
+      nativeSessionHeaders[entry.id] = { cwd: header.cwd, createdAt: header.createdAt }
+      const existing = store.getMap()[entry.id]
+      if (existing) return { ok: true, added: false, entry: existing }
+      if (registrationBlockedIds.has(entry.id)) return { ok: false, reason: 'session-deletion-pending' }
+      try {
+        const underHarness = path.resolve(entry.cwd) === harnessRoot || isPathInside(harnessRoot, entry.cwd)
+        if (!underHarness) assertPhysicalPathInside(entry.cwd, [path.dirname(entry.cwd)], fsApi)
+        else {
+          if (path.resolve(entry.cwd) !== harnessRoot) assertPhysicalPathInside(entry.cwd, [harnessRoot], fsApi)
+          if (entry.kind === 'project') assertPhysicalPathInside(entry.root, [harnessRoot], fsApi)
+        }
+        const valid = validateSessionEntry(entry.id, entry, { harnessRoot, config, mapping: { [entry.id]: entry } })
+        if (!valid.ok) return { ok: false, reason: valid.reason }
+        store.upsert(entry.id, entry)
+        log(`会话 ${entry.id} 已登记 DSH 原生工作区 (${entry.kind}, ${source})`)
+        return { ok: true, added: true, entry }
+      } catch (error) {
+        return { ok: false, reason: error?.message || 'session-registration-failed' }
+      }
+    }
+    const backfillSessionMappings = async (headers = []) => {
+      if (pluginDisposed || writesDisabled || store.isReadOnly()) return 0
+      const detectedRoot = inferHarnessRoot(harnessRoot, [...workspacePaths, ...headers.map((header) => header?.cwd)], { dailyDirName: config.dailyDirName, explicit: rootIsExplicit })
+      if (!hasSavedAutoRoot && !hasRootBoundState && detectedRoot !== harnessRoot && Object.keys(store.getMap()).length === 0 && Object.keys(preflightByStore.retained.value?.files || {}).length === 0) {
+        harnessRoot = detectedRoot
+        config = { ...config, harnessRoot }
+        status.write({ resolvedHarnessRoot: harnessRoot })
+        log(`[工作区] 已从 DSH 会话元数据识别 Harness 根目录: ${harnessRoot}`)
+      }
+      let added = 0
+      const seen = new Set()
+      for (const header of headers) {
+        const id = String(header?.id || '')
+        if (!isSafeSessionId(id) || seen.has(id)) continue
+        seen.add(id)
+        if (registerSessionHeader(header, 'startup-backfill').added) added += 1
+      }
+      for (const id of dsh.listArchivedIds()) {
+        if (seen.has(id) || store.getMap()[id]) continue
+        const found = await dsh.sessionMetadata(id)
+        if (found.ok && registerSessionHeader({ id, ...found.metadata }, 'archive-backfill').added) added += 1
+      }
+      if (added > 0) store.flush()
+      return added
+    }
     const updateFetch = ctx.get('conversationArchiveFetch') || globalThis.fetch
     let updateSnapshot = { state: config.updateCheck?.enabled === false ? 'disabled' : 'checking', currentVersion: PLUGIN_VERSION }
     const runUpdateCheck = async () => {
@@ -382,7 +454,10 @@ export default {
       if (pluginDisposed) return { ok: false, reason: 'plugin-disposed' }
       if (config.retention?.enabled === false) return { ok: true, retained: [] }
       let candidates
-      try { candidates = findRetentionCandidates(target, fsApi, { ...config.retention, ...candidateWindow }) }
+      try {
+        if (entry.layoutVersion === 3) validateCacheWrite(sessionId, entry)
+        candidates = findRetentionCandidates(target, fsApi, { ...config.retention, ...candidateWindow })
+      }
       catch { return { ok: false, reason: 'retention-scan-failed' } }
       if (candidates.truncated) return { ok: false, reason: 'retention-candidate-limit-exceeded' }
       if (candidates.length === 0) return { ok: true, retained: [] }
@@ -466,7 +541,12 @@ export default {
     const prepareArchivedCache = async (sessionId) => {
       if (writesDisabled || store.isReadOnly()) return { ok: false, reason: 'persistence-read-only' }
       reconcileNativeArchives()
-      const checked = getValidatedEntry(sessionId)
+      let checked = getValidatedEntry(sessionId)
+      if (!checked.ok && checked.reason === 'no-entry') {
+        const found = await dsh.sessionMetadata(checked.id)
+        if (found.ok) registerSessionHeader({ id: checked.id, ...found.metadata }, 'archive-reconciliation')
+        checked = getValidatedEntry(sessionId)
+      }
       if (!checked.ok) {
         if (checked.reason === 'no-entry') return compact({ ok: true, id: checked.id, cacheScope: 'none', map: store.getMap() })
         return compact({ ok: false, reason: checked.reason })
@@ -596,7 +676,7 @@ export default {
           sessionId: id,
           entry: entry || { kind: 'daily' },
           target: reviewTarget,
-          sourceRoots: entry?.layoutVersion === 3 ? [harnessRoot] : [sessionPersistence.root],
+          sourceRoots: entry?.layoutVersion === 3 ? [path.dirname(reviewTarget)] : [sessionPersistence.root],
           candidateWindow: nativeRetentionWindow(entry),
           operationId,
         })
@@ -702,6 +782,7 @@ export default {
     const retainedLibraryDeps = () => ({
       retainedRoot: path.join(harnessRoot, config.protectDirName || DEFAULTS.protectDirName),
       indexPath: retainedIndexPath, deleteOperationPath: retainedDeleteOperationPath, harnessRoot, stateRoot, fsApi,
+      workspaceRoots: [...workspacePaths, ...Object.values(nativeSessionHeaders).map((header) => header.cwd)],
     })
     let retainedSnapshot = []
     const refreshRetainedSnapshot = () => {
@@ -863,32 +944,8 @@ export default {
     // ── 1) 会话创建 → 只登记 DSH 原生元数据，不创建镜像缓存 ──
     ctx.on('session/created', (session) => {
       try {
-        if (writesDisabled || store.isReadOnly()) return
-        store.getMap()
-        if (writesDisabled || store.isReadOnly()) return
-        const header = session.header || {}
-        const cls = classifyWorkspace(header.cwd, { harnessRoot })
-        if (cls.kind === 'outside') return
-        if (path.resolve(header.cwd) !== harnessRoot) assertPhysicalPathInside(header.cwd, [harnessRoot], fsApi)
-        if (cls.kind === 'project') assertPhysicalPathInside(cls.root, [harnessRoot], fsApi)
-        const id = String(header.id)
-        if (!isSafeSessionId(id)) return
-        const created = new Date(header.createdAt ?? Date.now())
-        const entry = {
-          id,
-          cwd: header.cwd,
-          createdAt: header.createdAt ?? created.getTime(),
-          kind: cls.kind,
-          root: cls.root || undefined,
-          date: cls.kind === 'daily' ? dateStr(created) : undefined,
-          tag: placeholderTag(id),
-          layoutVersion: 3,
-          status: 'active',
-        }
-        const valid = validateSessionEntry(id, entry, { harnessRoot, config, mapping: { [id]: entry } })
-        if (!valid.ok) throw new Error(valid.reason)
-        store.upsert(id, entry)
-        log(`会话 ${id} 已登记 DSH 原生工作区 (${cls.kind})`)
+        const result = registerSessionHeader(session?.header || {}, 'session/created')
+        if (!result.ok && !['session-outside-harness', 'persistence-read-only'].includes(result.reason)) throw new Error(result.reason)
       } catch (e) {
         ctx.logger?.warn('[conversation-archive] session/created 处理失败:', e?.message)
       }
@@ -1213,8 +1270,10 @@ export default {
         loadVersionedJson(configPath, { schemaVersion: 1 }, (value) => ({ schemaVersion: 1, ...value }), fsApi)
         const merged = effectiveConfigSections(config)
         for (const key of Object.keys(next)) merged[key] = { ...merged[key], ...next[key] }
+        // An automatically discovered root must remain portable on the next boot.
+        if (!rootIsExplicit) delete merged.harnessRoot
         atomicWriteJson(configPath, { schemaVersion: 1, ...merged }, fsApi)
-        config = loadConfig(fsApi, cfg, configPath) // 重载生效
+        config = { ...loadConfig(fsApi, cfg, configPath), harnessRoot, nativeSessionHeaders } // 保留本次原生路径授权
         if (next.backup) resetBackupSchedule(new Date(), backupDeps())
         void runUpdateCheck()
         armBackupTimer() // 备份配置变化后重设定时器
@@ -1238,14 +1297,26 @@ export default {
     ;(async () => {
       try {
         await runUpdateCheck()
-        const liveIds = new Set(ctx.sessions.list().map((s) => String(s.id)))
+        if (pluginDisposed) return
+        const liveSessions = ctx.sessions.list()
+        const liveIds = new Set(liveSessions.map((s) => String(s.id)))
+        const persistedHeaders = []
         let persistedIds = new Set()
         try {
-          if (sessionPersistence?.listSnapshots) {
+          if (typeof sessionPersistence?.list === 'function') {
+            const rows = await sessionPersistence.list()
+            persistedHeaders.push(...rows)
+            persistedIds = new Set(rows.map((header) => String(header?.id || '')))
+          } else if (sessionPersistence?.listSnapshots) {
             const snaps = await sessionPersistence.listSnapshots()
-            persistedIds = new Set(snaps.map((s) => String(s.header.id)))
+            persistedHeaders.push(...snaps.map((s) => s?.header).filter(Boolean))
+            persistedIds = new Set(persistedHeaders.map((header) => String(header?.id || '')))
           }
         } catch { /* 忽略 */ }
+        await backfillSessionMappings([
+          ...liveSessions.map((session) => session?.header || ctx.sessions.get?.(session?.id)?.header).filter(Boolean),
+          ...persistedHeaders,
+        ])
         const map = store.getMap()
         const removed = orphanGC(map, { liveIds, persistedIds, fsApi, log })
         if (removed.length > 0) store.flush()
@@ -1282,7 +1353,7 @@ export default {
         }
         armBackupTimer()
         await reconcileArchivedCaches()
-        archiveTimer = setInterval(() => { void reconcileArchivedCaches() }, 1_000)
+        if (!pluginDisposed) archiveTimer = setInterval(() => { void reconcileArchivedCaches() }, 1_000)
       } catch (e) {
         ctx.logger?.warn('[conversation-archive] 启动任务失败:', e?.message)
       } finally {

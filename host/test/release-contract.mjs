@@ -37,8 +37,8 @@ assert.equal(hostPackage.name, manifest.name, 'installed wrapper package name ma
 assert.equal(clientPackage.name, manifest.name, 'client package name matches installed wrapper package name')
 assert.ok(registration, 'client bundle registers a ModuleLoader id')
 assert.equal(registration[1], manifest.name, 'client ModuleLoader id matches installed wrapper package name')
-assert.match(readmeEnglish, /Metadata not registered[\s\S]*not an error/i, 'English README explains the native-only metadata indicator')
-assert.match(readmeChinese, /元数据未登记[\s\S]*不是(?:故障|错误)/, 'Chinese README explains the native-only metadata indicator')
+assert.match(readmeEnglish, /Metadata not registered[\s\S]*backfill/i, 'English README explains automatic metadata backfill')
+assert.match(readmeChinese, /元数据未登记[\s\S]*回填/, 'Chinese README explains automatic metadata backfill')
 for (const required of ['LICENSE', 'package.json', 'cordis.patch.yml', 'host/lib/index.js', 'host/lib/core.js', 'host/lib/dsh-adapter.js', 'host/lib/update-check.js', 'client/lib/client.js', 'README.md', 'README.zh-CN.md']) {
   assert.ok(manifest.files[required], `manifest hashes ${required}`)
 }

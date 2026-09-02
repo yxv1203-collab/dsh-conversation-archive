@@ -6,122 +6,102 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Native archive control, protected file retention, and verified local backups for DeepSeek Harness.
+Archive management, important-file retention, and local backups for DeepSeek Harness (DSH), integrated into its settings interface.
 
-DSH Workspace Manager completes the archive lifecycle without replacing DeepSeek Harness state or reorganizing its workspace. It adds a native settings page for archived chats and projects, protects valuable outputs before cleanup, and provides auditable local backups.
+## Features
 
-## Interface
+- **Archived conversations:** search, filter, unarchive, and delete individual or multiple archived conversations. DSH remains the source of archive state.
+- **Important-file retention:** review candidate workspace outputs with the configured DSH model, preserve selected files before deletion, and verify copies with content hashes. The shared library supports deduplication, restore, batch removal, and in-app reminders.
+- **Local backups:** create ZIP backups manually, on a schedule, or before a clean shutdown. Backups include manifests and hashes; restoration uses an empty destination without overwriting files. Automatic backup is off by default; the default retention count is five verified backups.
+- **Cross-drive workspaces:** use DSH-registered workspace folders on different drives or in independent project directories. Historical session mappings are filled in automatically from DSH metadata.
 
-The workspace manager is embedded directly in the DSH settings system and follows its native visual language.
+## Screenshots
 
-![Archived conversations and retained files in DSH Workspace Manager](docs/images/workspace-manager-overview.png)
+![Archived conversations and retained files](docs/images/workspace-manager-overview.png)
 
-*Archive search and filtering, batch controls, and the shared retained-files library.*
+![Local backup and plugin settings](docs/images/backup-and-settings.png)
 
-![Local backup and plugin settings in DSH Workspace Manager](docs/images/backup-and-settings.png)
+## Requirements
 
-*Local or network backup targets, scheduling, retention policy, update checks, and diagnostics.*
-
-### Archive metadata status
-
-**Metadata not registered** means that a native archived item has no plugin-managed file mapping, commonly because it predates the plugin or exists only in DSH state. It is informational, not an error. Native restore and deletion remain available; the plugin simply has no additional registered file scope to retain or clean for that item.
-
-## Capabilities
-
-| Area | What it provides |
+| Component | Requirement |
 | --- | --- |
-| Archive control | Browse, search, filter, restore, and batch-manage chats and projects archived by DSH. |
-| Safe deletion | Remove only the selected conversation's DSH-owned data through the Windows Recycle Bin. |
-| Protected retention | Review candidate outputs with the active DSH model, preserve important files globally, deduplicate copies, and verify their hashes before cleanup. |
-| Verified backup | Create manual, scheduled, or shutdown ZIP backups with manifests and checksums; restore them through validated paths. |
-
-## Native by design
-
-- DSH remains the only source of truth for archive state.
-- The plugin does not create projects, reorganize existing workspaces, or generate category folders for every conversation.
-- No prerequisite directory needs to be created before installation.
-- Cleanup is limited to data owned or explicitly registered by DSH; existing source projects are never deletion targets.
-
-## Compatibility
-
-| Component | Status |
-| --- | --- |
-| Windows 10 / 11 | Supported |
-| DeepSeek Harness `0.1.1-rc.2` | Verified |
-| Later DSH releases | Not yet verified |
+| Operating system | Windows 10 or 11 |
+| DSH | Tested with `0.1.1-rc.2`; other versions are not yet verified |
 | PowerShell | 5.1 or later |
-| Node.js | 20 or later |
+| Node.js | 20 or later; also meet your DSH installation's requirements |
+| Workspace | A readable and writable folder, not a drive or share root |
 
-## Quick start
+## Installation
 
-### Install from GitHub
+### From GitHub
 
 ```powershell
 dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.0
 ```
 
-Restart DeepSeek Harness, open **Settings**, and select **Workspace Manager**.
+Restart DSH, then open **Settings → Workspace Manager**.
 
-### Install an offline package
+### From a release package
 
-1. Download `dsh-conversation-archive-1.0.0.tgz` and its `.sha256` file from the [v1.0.0 release](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.0).
-2. Verify the download:
-
-   ```powershell
-   Get-FileHash .\dsh-conversation-archive-1.0.0.tgz -Algorithm SHA256
-   Get-Content .\dsh-conversation-archive-1.0.0.tgz.sha256
-   ```
-
-3. Confirm that the two hashes match, then install:
-
-   ```powershell
-   dsh plugin --profile web add .\dsh-conversation-archive-1.0.0.tgz
-   ```
-
-## Deletion safety model
-
-Deletion is a guarded workflow rather than a direct filesystem operation:
-
-1. Resolve the native archived item and its registered DSH ownership scope.
-2. Scan that scope while excluding dependencies, temporary data, and disposable caches.
-3. Ask the active DSH model to assess candidate documents, code, media, and other outputs by content.
-4. Copy selected valuable outputs to the global retained-files library, deduplicate them, and verify their hashes.
-5. Move the conversation and its DSH-owned data to the Windows Recycle Bin.
-6. Stop the operation if review, copying, validation, or ownership checks fail.
-
-## Retained files and backups
-
-The retained-files library is shared across the complete DSH environment rather than tied to one project. Each entry records its source conversation, source project, original path, preservation time, and content hash. Files can be restored, selected in batches, or moved to the Recycle Bin. Review reminders are displayed inside DSH.
-
-Backups are independent of retained files. They can target a local folder or UNC/network path and can run manually, at a configured interval, or before a clean DSH shutdown. Version retention is configurable; expired backup sets are moved to the Recycle Bin.
-
-## Data ownership
-
-- Original source repositories and user-managed project folders are never cleanup targets.
-- Native DSH archive state always takes precedence over plugin metadata.
-- The retained-files library and backups remain on storage selected by the user.
-- Retained files are a local safeguard, not a cloud backup service.
-
-## Update and remove
+Download `dsh-conversation-archive-1.0.0.tgz` and its `.sha256` file from [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.0).
 
 ```powershell
-dsh plugin --profile web update dsh-conversation-archive
+Get-FileHash .\dsh-conversation-archive-1.0.0.tgz -Algorithm SHA256
+Get-Content .\dsh-conversation-archive-1.0.0.tgz.sha256
+```
+
+Confirm the hashes match, then install:
+
+```powershell
+dsh plugin --profile web add .\dsh-conversation-archive-1.0.0.tgz
+```
+
+For an earlier build with the same version number, download the current package and verify its checksum, remove the installed plugin, then install the downloaded package. The version number alone does not identify the revised build.
+
+## Deletion and data protection
+
+Unarchiving and deleting are separate operations. Deletion checks session ownership and paths, scans eligible outputs, asks the configured DSH model to assess their content, and verifies retained copies before recycling session data. Candidate file content may be sent to the model provider configured in DSH.
+
+Original project folders and source files are not deletion targets. Review, copy, integrity, or path-validation failures stop the protected deletion workflow. AI retention is selective and does not replace a full project backup.
+
+On DSH `0.1.1-rc.2`, session data is recycled while its archive marker remains in place. The next clean startup removes workspace references and finalizes deletion, preventing the conversation from reappearing in the active list.
+
+## Workspaces and metadata
+
+**Metadata not registered** means a native archived session has no valid plugin workspace mapping. Startup and archive synchronization backfill mappings from DSH session metadata. If the warning remains, check workspace access and session metadata; complete workspace-output protection and backups require a valid mapping.
+
+Native session paths are independent of the shared storage root. The plugin can infer that root from a canonical daily workspace on first use and records it for subsequent starts. Existing mappings and retained files are not automatically relocated. Explicit `harnessRoot`, `DCA_HARNESS_ROOT`, or `DSH_HARNESS_ROOT` settings take precedence.
+
+Restoring a retained file to its original location requires a recognized DSH workspace. Otherwise, select an alternate destination. Existing files are never overwritten, and paths that escape through junctions or symbolic links are rejected.
+
+## Backup scope
+
+Backups cover registered DSH session data and retained files, not entire source repositories. Targets may be local folders or supported network paths. Old backups are recycled only after the newest backup passes verification. Network availability, permissions, and Recycle Bin support depend on the destination.
+
+Cloud accounts are not connected directly. External sync software may synchronize a backup folder. Reminders appear inside DSH, not as Windows notifications.
+
+## Removal
+
+```powershell
 dsh plugin --profile web remove dsh-conversation-archive
 ```
 
-Removing the plugin does not silently delete retained files or backups.
+Restart DSH after removal. Retained files and backups are preserved.
 
-## Current scope
+## Development
 
-- Windows only.
-- Retained-file reminders are shown inside DSH; system notifications are not included.
-- Cloud-provider accounts are not connected directly. A locally synchronized or network folder can be used as a backup target.
-- On DSH builds without a public destructive API, confirmed deletion is queued and completed at the next clean application start.
+With a compatible DSH installation available locally:
 
-## Feedback
+```powershell
+npm test
+npm pack --dry-run --json
+npm pack
+```
 
-Bug reports and focused improvement proposals are welcome. Contact **yxv1203@gmail.com** or open a GitHub issue with the DSH version, plugin version, reproduction steps, and relevant logs.
+Tests cover archive synchronization, historical metadata backfill, cross-drive path rules, retention, backups, deletion recovery, and release integrity.
 
-## License
+## Support and license
 
-Released under the [MIT License](LICENSE).
+Report issues through [GitHub Issues](https://github.com/yxv1203-collab/dsh-conversation-archive/issues) or contact **yxv1203@gmail.com**. Include DSH and plugin versions, reproduction steps, and sanitized diagnostics.
+
+Licensed under [MIT](LICENSE).
