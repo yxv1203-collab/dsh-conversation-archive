@@ -22,6 +22,9 @@ const clientPackage = JSON.parse(fs.readFileSync(path.join(root, 'client', 'pack
 const clientBundle = fs.readFileSync(path.join(root, 'client', 'lib', 'client.js'), 'utf8')
 const readmeEnglish = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
 const readmeChinese = fs.readFileSync(path.join(root, 'README.zh-CN.md'), 'utf8')
+for (const readme of [readmeEnglish, readmeChinese]) {
+  assert.doesNotMatch(readme, /\*/, 'README uses headings and tables, not asterisk emphasis')
+}
 const registration = clientBundle.match(/__ModuleLoader__\.load\(\{\s*[\s\S]*?\bid:\s*['"]([^'"]+)['"]/)
 assert.equal(hostPackage.version, manifest.version)
 assert.equal(clientPackage.version, manifest.version)

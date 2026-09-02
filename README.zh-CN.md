@@ -1,107 +1,82 @@
 # DSH 工作区管理
 
-[![Release](https://img.shields.io/github/v/release/yxv1203-collab/dsh-conversation-archive?display_name=tag)](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/latest)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4)
-[![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
+[English](README.md) · [简体中文](README.zh-CN.md) · [版本下载](https://github.com/yxv1203-collab/dsh-conversation-archive/releases) · [问题反馈](https://github.com/yxv1203-collab/dsh-conversation-archive/issues)
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+在 DeepSeek Harness 设置中管理已归档对话、保留重要文件并备份会话数据。
 
-集成于 DeepSeek Harness（DSH）设置界面的归档管理、重要文件保留与本地备份插件。
+## 功能
 
-## 主要功能
+| 模块 | 功能说明 |
+| --- | --- |
+| 归档管理 | 搜索对话，按类型或项目筛选，支持单项与批量取消归档、删除。 |
+| 文件保留 | 删除前由 DSH 模型审核候选产出；校验副本后存入共享文件库，支持去重、来源记录、恢复、批量移除与提醒。 |
+| 本地备份 | 手动、定时或正常关闭前生成 ZIP；支持本地与网络目录、清单及哈希校验、保留数量设置，以及恢复到空目录。 |
+| 工作区支持 | 支持不同 Windows 磁盘和独立项目中的已登记文件夹，自动补登记历史会话，重启后保持共享文件库位置稳定。 |
+| 设置与诊断 | 保存使用偏好，提供应用内提醒、兼容版本更新提示与运行诊断，不自动安装更新。 |
 
-- **已归档对话管理：**支持搜索、筛选、取消归档、单项与批量删除，归档状态以 DSH 原生记录为准。
-- **重要文件保留：**使用 DSH 配置的模型审核工作区候选产出，在删除前保留选中文件并校验内容哈希。共享文件库支持去重、恢复、批量移除及应用内提醒。
-- **本地备份：**支持手动、定时及正常关闭前生成 ZIP 备份。备份包含文件清单与哈希，恢复到空目录，不覆盖已有文件。自动备份默认关闭，默认保留最近五份已验证备份。
-- **跨盘工作区：**支持不同磁盘上的 DSH 已登记工作区和独立项目目录，并从 DSH 元数据自动补齐历史会话映射。
-
-## 界面预览
+## 界面
 
 ![已归档对话与保留文件](docs/images/workspace-manager-overview.png)
 
+<details>
+<summary>本地备份与插件设置</summary>
+
 ![本地备份与插件设置](docs/images/backup-and-settings.png)
 
-## 环境要求
-
-| 组件 | 要求 |
-| --- | --- |
-| 操作系统 | Windows 10 或 11 |
-| DSH | 已测试 `0.1.1-rc.2`，其他版本尚未验证 |
-| PowerShell | 5.1 或更高版本 |
-| Node.js | 20 或更高版本，同时满足所安装 DSH 的要求 |
-| 工作区 | 具有读写权限的文件夹，不直接使用盘符或网络共享根目录 |
+</details>
 
 ## 安装
 
-### 从 GitHub 安装
+需要 Windows 10 或 11、PowerShell 5.1+，以及 Node.js 20+ 或 DSH 要求的更高版本。已测试 DSH `0.1.1-rc.2`，其他 DSH 版本尚未验证。
 
 ```powershell
 dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.0
 ```
 
-重启 DSH，打开“设置 → 工作区管理”。
+重启 DSH，打开“设置 → 工作区管理”。无需调整现有工作区结构。
 
-### 从发布包安装
+<details>
+<summary>离线安装与卸载</summary>
 
-从 [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.0) 下载 `dsh-conversation-archive-1.0.0.tgz` 及其 `.sha256` 文件。
+从 [版本下载](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.0) 获取 `.tgz` 安装包及对应的 `.sha256` 文件，确认校验值一致后安装。
 
 ```powershell
 Get-FileHash .\dsh-conversation-archive-1.0.0.tgz -Algorithm SHA256
 Get-Content .\dsh-conversation-archive-1.0.0.tgz.sha256
-```
-
-确认哈希一致后安装：
-
-```powershell
 dsh plugin --profile web add .\dsh-conversation-archive-1.0.0.tgz
 ```
 
-如果已安装同版本号的早期构建，请下载当前发布包并校验，卸载已安装插件后，再安装下载的包。仅凭版本号无法区分同版本修订包。
-
-## 删除与数据保护
-
-取消归档与删除是独立操作。删除流程先校验会话归属和路径，再扫描符合条件的产出，交由 DSH 配置的模型审核内容；保留副本通过校验后，才回收会话数据。候选文件内容可能发送给 DSH 配置的模型服务商。
-
-原始项目目录和源码文件不属于删除目标。审核、复制、完整性或路径校验失败时，保护性删除流程会停止。AI 保留是选择性保护，不能替代完整项目备份。
-
-在 DSH `0.1.1-rc.2` 中，会话数据回收后暂时保留归档标记；下次正常启动时解除工作区引用并完成删除，避免对话重新出现在活动列表。
-
-## 工作区与元数据
-
-**元数据未登记**表示原生归档会话尚无有效的插件工作区映射。插件在启动和归档同步时，从 DSH 会话元数据自动回填映射。若提示持续出现，请检查工作区是否可访问、会话元数据是否可读取；完整的工作区产出保护和备份需要有效映射。
-
-原生会话路径不受共享存储根目录限制。插件首次使用时可从规范的日常工作区识别共享根目录，并记录该位置供后续启动使用。已有映射和保留文件不会自动迁移。显式设置的 `harnessRoot`、`DCA_HARNESS_ROOT` 或 `DSH_HARNESS_ROOT` 优先。
-
-恢复保留文件到原位置时，目标须属于可识别的 DSH 工作区；否则请选择其他恢复目录。恢复不会覆盖已有文件，并拒绝通过 Junction 或符号链接越界的路径。
-
-## 备份范围
-
-备份包含已登记的 DSH 会话数据和保留文件，不包含完整源码仓库。目标可选本地文件夹或受支持的网络路径；最新备份验证通过后，才会回收超出保留数量的旧备份。网络可用性、目录权限及回收站支持取决于目标位置。
-
-插件不直接连接云盘账号，可由外部同步软件同步备份文件夹。提醒仅在 DSH 内显示，不发送 Windows 系统通知。
-
-## 卸载
+卸载命令：
 
 ```powershell
 dsh plugin --profile web remove dsh-conversation-archive
 ```
 
-卸载后重启 DSH。已有保留文件和备份不会被删除。
+安装或卸载后重启 DSH。已有保留文件和备份不会被删除。如需替换同版本号的早期构建，请卸载后安装当前发布包，并核对校验值。
 
-## 开发与测试
+</details>
 
-本机安装兼容版本的 DSH 后执行：
+## 使用与数据保护
 
-```powershell
-npm test
-npm pack --dry-run --json
-npm pack
-```
+- 归档状态以 DSH 原生记录为准。插件仅管理已归档对话，不另建项目目录体系。
+- 删除仅回收所选会话的 DSH 数据，不删除原始项目目录或源码。文件审核和副本校验成功后，才继续保护性删除。在 DSH `0.1.1-rc.2` 中，工作区引用清理会在下次正常启动时完成。
+- 文件审核可能将候选内容发送给 DSH 配置的模型服务商。文件保留属于选择性保护，不能替代完整项目备份。
+- 备份范围为已登记的会话数据和保留文件，不包含完整源码仓库。自动备份默认关闭，默认保留五份已验证备份；新备份验证通过后才回收超额旧备份。
+- 工作区应使用可访问的盘内子目录，不直接使用盘符或共享根目录。恢复不覆盖已有文件。网络备份目标须具备相应权限及回收站支持；插件不直接连接云盘账号。
 
-测试覆盖归档同步、历史元数据回填、跨盘路径规则、文件保留、备份、删除恢复及发布完整性。
+<details>
+<summary>元数据未登记</summary>
 
-## 反馈与协议
+该提示表示会话尚无有效的工作区映射。插件会在启动和归档同步时，从 DSH 元数据自动回填。若提示持续出现，请先检查工作区访问权限和会话元数据，再使用产出保护或完整备份功能。
 
-通过 [GitHub Issues](https://github.com/yxv1203-collab/dsh-conversation-archive/issues) 反馈问题，或联系 **yxv1203@gmail.com**。请提供 DSH 与插件版本、复现步骤和脱敏后的诊断信息。
+恢复保留文件到原位置时，目标须属于可识别的 DSH 工作区；否则请选择其他恢复目录。
 
-本项目采用 [MIT 协议](LICENSE)。
+</details>
+
+## 参与贡献
+
+通过 [Issues](https://github.com/yxv1203-collab/dsh-conversation-archive/issues) 提交问题或功能建议，也可联系 [yxv1203@gmail.com](mailto:yxv1203@gmail.com)。请附上 DSH 版本、复现步骤和脱敏诊断信息。提交代码前，在本机安装兼容版本的 DSH 并运行 `npm test`。
+
+## 开源协议
+
+[MIT](LICENSE)
