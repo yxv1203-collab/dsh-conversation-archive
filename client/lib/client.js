@@ -251,10 +251,10 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const slots = ctx.get('slots')
       if (!slots) return
-      workspaceRuntime = ctx.get('workspaces') || ctx.workspaces || null
+      workspaceRuntime = ctx.get('workspaces')
       slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'workspace-manager', order: 90, label: () => '工作区管理' }, WorkspaceSettings))
     }
-    module.exports = { name: 'conversation-archive-client', inject: ['slots'], apply }
+    module.exports = { name: 'conversation-archive-client', inject: ['slots', 'workspaces'], apply }
     return module.exports
   },
 })

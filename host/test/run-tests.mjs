@@ -15,7 +15,7 @@ import {
   inspectVersionedJson, appendOperation, inspectOperationsLog, validateSessionEntry, validateCacheDeleteTarget, resolveProtectedChild,
   findRetentionCandidates,
   archiveSessionFlow, restoreSessionFlow, purgeSessionFlow, pruneEmptyParents, runMany, orphanGC,
-  protectImportantFiles, remindDue, scanImportantInDir, CATEGORY_DIRS,
+  protectImportantFiles, scanImportantInDir, CATEGORY_DIRS,
 } from '../lib/core.js'
 import { createStateStore } from '../lib/index.js'
 
@@ -658,17 +658,6 @@ test('重要文件保护拒绝保护库子目录 junction 越界', () => {
   fs.mkdirSync(outside, { recursive: true })
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `New-Item -ItemType Junction -Path '${path.join(protectRoot, path.basename(dir), '文档')}' -Target '${outside}' | Out-Null`], { stdio: 'ignore' })
   assert.throws(() => protectImportantFiles(dir, protectRoot, fs), { message: 'path-reparse-escape' })
-})
-
-test('remindDue：按天频次判定', () => {
-  assert.equal(remindDue(0, loadConfig(fs, {}, '')), true, '从未提醒 → 到期')
-  const now = Date.now()
-  assert.equal(remindDue(now, loadConfig(fs, {}, '')), false, '刚提醒 → 未到期')
-  assert.equal(remindDue(now - 2 * 24 * 3600e3, loadConfig(fs, {}, '')), true, '超过 1 天 → 到期')
-  assert.equal(remindDue(now, loadConfig(fs, { remind: { intervalDays: 2 } }, '')), false)
-  assert.equal(remindDue(now - (2 * 24 * 3600e3 - 3600e3), loadConfig(fs, { remind: { intervalDays: 2 } }, '')), false, '2 天内不重复')
-  assert.equal(remindDue(now - 2 * 24 * 3600e3, loadConfig(fs, { remind: { intervalDays: 2 } }, '')), true, '满 2 天即提醒')
-  assert.equal(remindDue(now - 3 * 24 * 3600e3, loadConfig(fs, { remind: { intervalDays: 2 } }, '')), true)
 })
 
 let passed = 0

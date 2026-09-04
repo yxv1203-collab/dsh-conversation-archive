@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-archive",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Native archive, retention, and backup management for DeepSeek Harness.",
   "type": "module",
   "main": "./host/lib/index.js",
@@ -36,7 +36,7 @@
   "scripts": {
     "check": "node --check host/lib/index.js && node --check host/lib/core.js && node --check host/lib/dsh-adapter.js && node --check host/lib/update-check.js && node --check client/lib/client.js",
     "test:unit": "node host/test/portability-guard.mjs && node host/test/run-tests.mjs && node host/test/backfill.mjs && node host/test/dsh-adapter.mjs && node host/test/retention.mjs && node host/test/retained-library.mjs && node host/test/backup.mjs && node host/test/update-check.mjs && node host/test/release-contract.mjs && node client/test/client-contract.mjs",
-    "test:integration": "node host/test/integration-loader.mjs",
+    "test:integration": "node client/test/client-loader.mjs && node host/test/integration-loader.mjs",
     "test": "npm run check && npm run test:unit && npm run test:integration"
   },
   "keywords": [

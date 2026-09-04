@@ -497,13 +497,6 @@ export function protectImportantFiles(targetDir, protectRoot, fsApi, config = DE
   return protectedList
 }
 
-/** 提醒到期判定：距上次提醒超过 intervalDays 天（精确到天） */
-export function remindDue(lastRemindedAt, config = DEFAULTS) {
-  const days = Math.max(1, Number(config.remind?.intervalDays) || 1)
-  if (!lastRemindedAt) return true
-  return Date.now() - lastRemindedAt >= days * 24 * 60 * 60 * 1000
-}
-
 /** 清洗文件夹名：替换非法字符与控制字符、压缩空白、限长 */
 export function sanitizeName(input, maxLen = 80) {
   if (typeof input !== 'string') return ''
@@ -1844,9 +1837,6 @@ export function resetBackupSchedule(now, deps) {
     return { ok: true, nextBackupAt: state.nextBackupAt }
   } catch (e) { return { ok: false, reason: e.message || 'backup-schedule-write-failed' } }
 }
-
-/** Compatibility wrapper for the existing slash command; it now uses verified typed sources. */
-export async function backupFlow(deps) { return createBackup({ type: 'all' }, deps) }
 
 /**
  * 孤儿映射 GC：active 条目缓存夹缺失且会话既非 live 也非 persisted → 移除；

@@ -1,10 +1,10 @@
 {
   "name": "dsh-conversation-archive",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platform": "win32",
   "dsh": {
     "minVersion": "0.1.1-rc.2",
-    "maxTestedVersion": "0.1.1-rc.2"
+    "maxTestedVersion": "0.1.2-rc.1"
   },
   "release": {
     "repository": "yxv1203-collab/dsh-conversation-archive",
@@ -12,15 +12,15 @@
     "pageUrl": "https://github.com/yxv1203-collab/dsh-conversation-archive/releases"
   },
   "files": {
-    "client/lib/client.js": "2984b41c61044a5e87ee54e5be0e12cf679274cb095afe8964862c76eb629463",
+    "client/lib/client.js": "40c23b8405fbdcb666a7ab66f04efa6ff0718a7330706af53785cd174c6fac62",
     "cordis.patch.yml": "b33b95b4d3c21487f9363c9673ba10687a4affa03cdd4f3219a235490eeb9310",
-    "host/lib/core.js": "eb4ea12bbec5547cc4594cf55827c04151b07accf174d4336de464d7b23f167b",
+    "host/lib/core.js": "3a62588147d755a53e543e625fc42a86592135a34b559a12910f941a0e813251",
     "host/lib/dsh-adapter.js": "87a02fc4555b4bf7cf42588d458124c0e8fcf4a183ecedf611ab7fd86870b015",
     "host/lib/index.js": "b18ce2dfdb35f281085b3f540d7c74a6d8d4eb5819b856bc49441611833d46ff",
     "host/lib/update-check.js": "f3cf99c0ee7f1278bf4c41bf4a09a508d6f11791e6c8d13fa51b4ad39dc4bd32",
     "LICENSE": "014cebc5f93a967fa8648f455e1aafa6fb9110e1d476f7ba652a3cd93b32c8fe",
-    "package.json": "23fa2ba0c561000cac31df2c88675fadb81a6ad48ce06709602f5b4474af038a",
-    "README.md": "8a00439f6cb2b366ad0c436533fac6dcc925b2538bacc1fa1c31d98cac5aa6c7",
-    "README.zh-CN.md": "8e20c160e515ba8580e46aeab96a83264cc274117cb8ece9c32e2861934fd78e"
+    "package.json": "0ac3ce905e8548f268ca2961f986ede27caa958389177b0999162f98aa56ec5a",
+    "README.md": "87f82c0fad59a4e1254324dc5477828107b9d71ecbf714a4d2d15cbdacac505a",
+    "README.zh-CN.md": "3b18eba6a80a3ee658160a98778f5d6b85ed523cf7530a69fd76673ecbe5cc57"
   }
 }
