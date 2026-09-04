@@ -6,14 +6,14 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Archive management, important-file retention, and local backups for DeepSeek Harness (DSH), integrated into its settings interface.
+Native workspace governance for DeepSeek Harness (DSH), bringing archived-session management, pre-deletion protection for important outputs, and verifiable local backups into the Settings interface. The plugin keeps DSH as the source of truth for session state and uses strict path validation, content hashes, and fail-closed safeguards to reduce risk when cleaning up archived work.
 
 ## Features
 
-- **Archived conversations:** search, filter, unarchive, and delete individual or multiple archived conversations. DSH remains the source of archive state.
-- **Important-file retention:** review candidate workspace outputs with the configured DSH model, preserve selected files before deletion, and verify copies with content hashes. The shared library supports deduplication, restore, batch removal, and in-app reminders.
-- **Local backups:** create ZIP backups manually, on a schedule, or before a clean shutdown. Backups include manifests and hashes; restoration uses an empty destination without overwriting files. Automatic backup is off by default; the default retention count is five verified backups.
-- **Cross-drive workspaces:** use DSH-registered workspace folders on different drives or in independent project directories. Historical session mappings are filled in automatically from DSH metadata.
+- **Native archive management:** browse, search, and filter DSH-archived conversations, then restore or delete them individually or in batches. Archive state always comes from DSH rather than a parallel plugin index.
+- **Protected output retention:** before deletion, the configured DSH model reviews eligible workspace outputs. Selected files are copied into a shared, deduplicated library and verified by content hash, with restore, batch removal, and in-app reminders built in.
+- **Verified local backups:** create ZIP backups manually, on a schedule, or before a clean shutdown. Each backup carries a manifest and hashes, restores only into an empty destination, and never overwrites existing files. Automatic backup is off by default; five verified backups are retained by default.
+- **Workspace and path safety:** support DSH-registered workspaces across drives and independent project directories, backfill historical mappings from native metadata, and reject traversal through junctions or symbolic links.
 
 ## Screenshots
 
