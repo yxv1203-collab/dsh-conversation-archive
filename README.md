@@ -36,27 +36,31 @@ Native workspace governance for DeepSeek Harness (DSH), bringing archived-sessio
 ### From GitHub
 
 ```powershell
-dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.1
+dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.1.0
 ```
 
 Restart DSH, then open **Settings → Workspace Manager**.
 
 ### From a release package
 
-Download `dsh-conversation-archive-1.0.1.tgz` and its `.sha256` file from [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.1).
+Download `dsh-conversation-archive-1.1.0.tgz` and its `.sha256` file from [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.1.0).
 
 ```powershell
-Get-FileHash .\dsh-conversation-archive-1.0.1.tgz -Algorithm SHA256
-Get-Content .\dsh-conversation-archive-1.0.1.tgz.sha256
+Get-FileHash .\dsh-conversation-archive-1.1.0.tgz -Algorithm SHA256
+Get-Content .\dsh-conversation-archive-1.1.0.tgz.sha256
 ```
 
-Confirm the hashes match, then install:
+Confirm the hashes match. For an offline installation, first copy the package to the profile's durable dependency directory, then install that retained copy:
 
 ```powershell
-dsh plugin --profile web add .\dsh-conversation-archive-1.0.1.tgz
+$profileDeps = Join-Path $env:DSH_HOME 'profiles\web\deps'
+New-Item -ItemType Directory -Force $profileDeps | Out-Null
+$profilePackage = Join-Path $profileDeps 'dsh-conversation-archive-1.1.0.tgz'
+Copy-Item .\dsh-conversation-archive-1.1.0.tgz $profilePackage
+dsh plugin --profile web add $profilePackage
 ```
 
-For an earlier build with the same version number, download the current package and verify its checksum, remove the installed plugin, then install the downloaded package. The version number alone does not identify the revised build.
+Keep this retained `.tgz` for as long as the file-based installation remains in the profile. Deleting or moving it makes pnpm re-resolution fail during later plugin installs. Installing from the GitHub tag above avoids a disposable local-file dependency.
 
 ## Deletion and data protection
 

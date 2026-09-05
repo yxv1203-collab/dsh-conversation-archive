@@ -36,27 +36,31 @@
 ### 从 GitHub 安装
 
 ```powershell
-dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.0.1
+dsh plugin --profile web add github:yxv1203-collab/dsh-conversation-archive#v1.1.0
 ```
 
 重启 DSH，打开“设置 → 工作区管理”。
 
 ### 从发布包安装
 
-从 [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.0.1) 下载 `dsh-conversation-archive-1.0.1.tgz` 及其 `.sha256` 文件。
+从 [GitHub Releases](https://github.com/yxv1203-collab/dsh-conversation-archive/releases/tag/v1.1.0) 下载 `dsh-conversation-archive-1.1.0.tgz` 及其 `.sha256` 文件。
 
 ```powershell
-Get-FileHash .\dsh-conversation-archive-1.0.1.tgz -Algorithm SHA256
-Get-Content .\dsh-conversation-archive-1.0.1.tgz.sha256
+Get-FileHash .\dsh-conversation-archive-1.1.0.tgz -Algorithm SHA256
+Get-Content .\dsh-conversation-archive-1.1.0.tgz.sha256
 ```
 
-确认哈希一致后安装：
+确认哈希一致。离线安装时，先把发布包复制到 profile 的持久依赖目录，再安装这份保留副本：
 
 ```powershell
-dsh plugin --profile web add .\dsh-conversation-archive-1.0.1.tgz
+$profileDeps = Join-Path $env:DSH_HOME 'profiles\web\deps'
+New-Item -ItemType Directory -Force $profileDeps | Out-Null
+$profilePackage = Join-Path $profileDeps 'dsh-conversation-archive-1.1.0.tgz'
+Copy-Item .\dsh-conversation-archive-1.1.0.tgz $profilePackage
+dsh plugin --profile web add $profilePackage
 ```
 
-如果已安装同版本号的早期构建，请下载当前发布包并校验，卸载已安装插件后，再安装下载的包。仅凭版本号无法区分同版本修订包。
+只要 profile 仍采用文件依赖，就必须保留该 `.tgz`，不要删除或移动；否则 pnpm 在后续安装其他插件、重新解析全部依赖时会失败。使用上面的 GitHub 标签安装则不会依赖临时下载路径。
 
 ## 删除与数据保护
 
